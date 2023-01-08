@@ -1,5 +1,7 @@
 use core::ptr::NonNull;
 
+use crate::{word::Word, Error, Forth, WordFunc};
+
 #[derive(Debug, PartialEq)]
 pub enum DiskError {
     OutOfRange,
@@ -11,11 +13,76 @@ pub trait DiskDriver {
     fn write(&mut self, idx: u16, source: NonNull<u8>, len: usize) -> Result<(), DiskError>;
 }
 
+pub trait BorrowDiskMut {
+    type Driver: DiskDriver;
+    fn borrow_disk_mut(&mut self) -> &mut Disk<Self::Driver>;
+}
+
+impl<D: DiskDriver> BorrowDiskMut for Disk<D> {
+    type Driver = D;
+
+    fn borrow_disk_mut(&mut self) -> &mut Disk<Self::Driver> {
+        self
+    }
+}
+
 pub struct Disk<D: DiskDriver> {
     // Pair of buffers. The first one is "active", the second is "oldest"
     caches: [Cache; 2],
     size: usize,
     driver: D,
+}
+
+fn block<BDM: BorrowDiskMut>(f: &mut Forth<BDM>) -> Result<(), Error> {
+    let idx = f.data_stack.try_pop()?;
+    let idx = u16::try_from(unsafe { idx.data }).map_err(|_| Error::Disk(DiskError::OutOfRange))?;
+    let ptr = f
+        .host_ctxt
+        .borrow_disk_mut()
+        .block(idx)
+        .map_err(Error::Disk)?;
+    f.data_stack.push(Word::ptr(ptr.as_ptr()))?;
+    Ok(())
+}
+
+fn buffer<BDM: BorrowDiskMut>(f: &mut Forth<BDM>) -> Result<(), Error> {
+    let idx = f.data_stack.try_pop()?;
+    let idx = u16::try_from(unsafe { idx.data }).map_err(|_| Error::Disk(DiskError::OutOfRange))?;
+    let ptr = f
+        .host_ctxt
+        .borrow_disk_mut()
+        .buffer(idx)
+        .map_err(Error::Disk)?;
+    f.data_stack.push(Word::ptr(ptr.as_ptr()))?;
+    Ok(())
+}
+
+fn empty_buffers<BDM: BorrowDiskMut>(f: &mut Forth<BDM>) -> Result<(), Error> {
+    f.host_ctxt.borrow_disk_mut().empty_buffers();
+    Ok(())
+}
+
+fn update<BDM: BorrowDiskMut>(f: &mut Forth<BDM>) -> Result<(), Error> {
+    f.host_ctxt.borrow_disk_mut().mark_dirty();
+    Ok(())
+}
+
+fn flush<BDM: BorrowDiskMut>(f: &mut Forth<BDM>) -> Result<(), Error> {
+    f.host_ctxt.borrow_disk_mut().flush().map_err(Error::Disk)?;
+    Ok(())
+}
+
+impl<BDM> Forth<BDM>
+where
+    BDM: BorrowDiskMut + 'static,
+{
+    pub const DISK_BUILTINS: &'static [(&'static str, WordFunc<BDM>)] = &[
+        ("block", block),
+        ("buffer", buffer),
+        ("empty_buffers", empty_buffers),
+        ("update", update),
+        ("flush", flush),
+    ];
 }
 
 impl<D> Disk<D>
