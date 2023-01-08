@@ -1,3 +1,4 @@
+use core::ptr::NonNull;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::UnsafeCell,
@@ -31,6 +32,10 @@ impl<T> LeakBox<T> {
 
     pub fn ptr(&self) -> *mut T {
         self.ptr.cast()
+    }
+
+    pub fn non_null(&self) -> NonNull<T> {
+        NonNull::new(self.ptr.cast::<T>()).unwrap()
     }
 
     pub fn len(&self) -> usize {

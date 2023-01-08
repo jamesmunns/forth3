@@ -152,6 +152,8 @@ impl<T: 'static> Forth<T> {
         //
         builtin!("@", Self::var_load),
         builtin!("!", Self::var_store),
+        builtin!("b@", Self::byte_var_load),
+        builtin!("b!", Self::byte_var_store),
         builtin!("w+", Self::word_add),
         //
         // Constants
@@ -248,6 +250,23 @@ impl<T: 'static> Forth<T> {
             w_addr.ptr.cast::<Word>().offset(offset)
         };
         self.data_stack.push(Word::ptr(new_addr))?;
+        Ok(())
+    }
+
+    pub fn byte_var_load(&mut self) -> Result<(), Error> {
+        let w = self.data_stack.try_pop()?;
+        let ptr = unsafe { w.ptr.cast::<u8>() };
+        let val = unsafe { Word::data(i32::from(ptr.read())) };
+        self.data_stack.push(val)?;
+        Ok(())
+    }
+
+    pub fn byte_var_store(&mut self) -> Result<(), Error> {
+        let w_addr = self.data_stack.try_pop()?;
+        let w_val = self.data_stack.try_pop()?;
+        unsafe {
+            w_addr.ptr.cast::<u8>().write((w_val.data & 0xFF) as u8);
+        }
         Ok(())
     }
 
