@@ -1,52 +1,10 @@
-use std::{
-    io::{stdin, stdout, Write},
-    ptr::NonNull,
-};
+use std::io::{stdin, stdout, Write};
 
 use forth3::{
-    disk::{BorrowDiskMut, Disk, DiskError},
+    disk::{BorrowDiskMut, Disk, BinDisk},
     leakbox::{LBForth, LBForthParams, LeakBox},
     Forth,
 };
-
-struct BinDisk;
-
-impl forth3::disk::DiskDriver for BinDisk {
-    fn read(&mut self, idx: u16, dest: NonNull<u8>, len: usize) -> Result<(), DiskError> {
-        match std::fs::read(&format!("./disk/{:05}.bin", idx)) {
-            Ok(v) => {
-                let cap_len = v.len().min(len);
-                unsafe {
-                    dest.as_ptr().copy_from_nonoverlapping(v.as_ptr(), cap_len);
-                    if cap_len < v.len() {
-                        dest.as_ptr()
-                            .add(cap_len)
-                            .write_bytes(b'x', v.len() - cap_len);
-                    }
-                }
-            }
-            Err(_) => {
-                let mut val = core::iter::repeat(b' ').take(len).collect::<Vec<u8>>();
-                self.write(idx, NonNull::new(val.as_mut_ptr().cast()).unwrap(), len)?;
-                unsafe {
-                    dest.as_ptr().copy_from_nonoverlapping(val.as_ptr(), len);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn write(&mut self, idx: u16, source: NonNull<u8>, len: usize) -> Result<(), DiskError> {
-        std::fs::create_dir_all("./disk").map_err(|_| DiskError::InternalDriverError)?;
-        let name = format!("./disk/{:05}.bin", idx);
-        let _ = std::fs::remove_file(&name);
-        std::fs::write(&name, unsafe {
-            core::slice::from_raw_parts(source.as_ptr(), len)
-        })
-        .map_err(|_| DiskError::InternalDriverError)?;
-        Ok(())
-    }
-}
 
 struct ReplContext {
     disk: Disk<BinDisk>,
