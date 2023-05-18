@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    dictionary::BuiltinEntry, input::WordStrBuf, output::OutputBuf, word::Word, CallContext, Forth,
+    dictionary::{BuiltinEntry, AsyncBuiltinEntry}, input::WordStrBuf, output::OutputBuf, word::Word, CallContext, Forth,
 };
 
 // Helper type that will un-leak the buffer once it is dropped.
@@ -82,7 +82,7 @@ impl<T: 'static> LBForth<T> {
         params: LBForthParams,
         host_ctxt: T,
         builtins: &'static [BuiltinEntry<T>],
-        async_builtins: &'static [BuiltinEntry<T>],
+        async_builtins: &'static [AsyncBuiltinEntry<T>],
     ) -> Self {
         let _payload_dstack: LeakBox<Word> = LeakBox::new(params.data_stack_elems);
         let _payload_rstack: LeakBox<Word> = LeakBox::new(params.return_stack_elems);

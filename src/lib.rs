@@ -15,7 +15,7 @@ pub mod leakbox;
 
 use core::ptr::NonNull;
 
-use dictionary::{BuiltinEntry, EntryHeader, EntryKind};
+use dictionary::{BuiltinEntry, EntryHeader, EntryKind, AsyncBuiltinEntry};
 
 pub use crate::vm::Forth;
 use crate::{
@@ -73,6 +73,7 @@ pub enum Error {
     // Not *really* an error - but signals that a function should be called
     // again. At the moment, only used for internal interpreter functions.
     PendingCallAgain,
+    NoAsyncInNonAsyncSteppa,
 }
 
 impl From<StackError> for Error {
@@ -211,7 +212,7 @@ pub enum Lookup<T: 'static> {
         bi: NonNull<BuiltinEntry<T>>,
     },
     Async {
-        bi: NonNull<BuiltinEntry<T>>,
+        bi: NonNull<AsyncBuiltinEntry<T>>,
     },
     LQuote,
     LParen,

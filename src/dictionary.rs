@@ -1,6 +1,7 @@
 use crate::fastr::FaStr;
 use crate::{Word, WordFunc};
 use core::alloc::Layout;
+use core::marker::PhantomData;
 use core::ptr::addr_of_mut;
 use core::ptr::NonNull;
 
@@ -10,7 +11,7 @@ pub enum BumpError {
     CantAllocUtf8,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[repr(u16)]
 pub enum EntryKind {
     StaticBuiltin,
@@ -21,16 +22,20 @@ pub enum EntryKind {
 
 #[repr(C)]
 pub struct EntryHeader<T: 'static> {
-    pub func: WordFunc<T>,
     pub name: FaStr,
     pub kind: EntryKind, // todo
     pub len: u16,
+    pub _pd: PhantomData<T>,
 }
 
 #[repr(C)]
 pub struct BuiltinEntry<T: 'static> {
-    // TODO(AJM): This should not be pub, if I decide to make async bis "special"
-    // ESPECIALLY if I rely on them being filled with "|| Err(())" functions
+    pub hdr: EntryHeader<T>,
+    pub func: WordFunc<T>,
+}
+
+#[repr(C)]
+pub struct AsyncBuiltinEntry<T: 'static> {
     pub hdr: EntryHeader<T>,
 }
 
@@ -38,6 +43,7 @@ pub struct BuiltinEntry<T: 'static> {
 #[repr(C)]
 pub struct DictionaryEntry<T: 'static> {
     pub hdr: EntryHeader<T>,
+    pub func: WordFunc<T>,
 
     /// Link field, points back to the previous entry
     pub(crate) link: Option<NonNull<DictionaryEntry<T>>>,
@@ -171,7 +177,7 @@ pub mod test {
     use std::alloc::Layout;
 
     use crate::{
-        dictionary::{DictionaryBump, DictionaryEntry},
+        dictionary::{DictionaryBump, DictionaryEntry, BuiltinEntry, AsyncBuiltinEntry},
         leakbox::LeakBox,
         Word,
     };
@@ -180,7 +186,9 @@ pub mod test {
 
     #[test]
     fn sizes() {
-        assert_eq!(size_of::<EntryHeader<()>>(), 4 * size_of::<usize>());
+        assert_eq!(size_of::<EntryHeader<()>>(), 3 * size_of::<usize>());
+        assert_eq!(size_of::<BuiltinEntry<()>>(), 4 * size_of::<usize>());
+        assert_eq!(size_of::<AsyncBuiltinEntry<()>>(), 3 * size_of::<usize>());
     }
 
     #[test]

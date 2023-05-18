@@ -3,14 +3,13 @@ use core::{
     num::NonZeroU16,
     ops::{Deref, Neg},
     ptr::NonNull,
-    str::FromStr,
+    str::FromStr, marker::PhantomData,
     // task::{Context, Poll},
 };
 
 use crate::{
     dictionary::{
-        BuiltinEntry, BumpError, DictionaryBump, DictionaryEntry, EntryHeader, EntryKind,
-        DispatchAsync, self,
+        BuiltinEntry, BumpError, DictionaryBump, DictionaryEntry, EntryHeader, EntryKind, AsyncBuiltinEntry,
     },
     fastr::{FaStr, TmpFaStr},
     input::WordStrBuf,
@@ -19,6 +18,9 @@ use crate::{
     word::Word,
     CallContext, Error, Lookup, Mode, ReplaceErr, WordFunc,
 };
+
+#[cfg(feature = "async")]
+use crate::dictionary::DispatchAsync;
 
 pub mod builtins;
 
@@ -39,7 +41,7 @@ pub struct Forth<T: 'static> {
     pub output: OutputBuf,
     pub host_ctxt: T,
     builtins: &'static [BuiltinEntry<T>],
-    async_builtins: &'static [BuiltinEntry<T>],
+    async_builtins: &'static [AsyncBuiltinEntry<T>],
 }
 
 enum ProcessAction {
@@ -64,7 +66,7 @@ impl<T> Forth<T> {
         output: OutputBuf,
         host_ctxt: T,
         builtins: &'static [BuiltinEntry<T>],
-        async_builtins: &'static [BuiltinEntry<T>],
+        async_builtins: &'static [AsyncBuiltinEntry<T>],
     ) -> Result<Self, Error> {
         let data_stack = Stack::new(dstack_buf.0, dstack_buf.1);
         let return_stack = Stack::new(rstack_buf.0, rstack_buf.1);
@@ -106,11 +108,12 @@ impl<T> Forth<T> {
         unsafe {
             dict_base.as_ptr().write(DictionaryEntry {
                 hdr: EntryHeader {
-                    func: bi,
                     name,
                     kind: EntryKind::RuntimeBuiltin,
                     len: 0,
+                    _pd: PhantomData,
                 },
+                func: bi,
                 link: self.run_dict_tail.take(),
                 parameter_field: [],
             });
@@ -130,7 +133,7 @@ impl<T> Forth<T> {
             .or_else(|| self.find_in_bis(&fastr).map(NonNull::cast))
     }
 
-    fn find_in_async_bis(&self, fastr: &TmpFaStr<'_>) -> Option<NonNull<BuiltinEntry<T>>> {
+    fn find_in_async_bis(&self, fastr: &TmpFaStr<'_>) -> Option<NonNull<AsyncBuiltinEntry<T>>> {
         self.async_builtins
             .iter()
             .find(|bi| &bi.hdr.name == fastr.deref())
@@ -322,13 +325,17 @@ impl<T> Forth<T> {
             Err(e) => return Err(Error::Stack(e)),
         };
 
-        let eh = unsafe { top.eh.as_ref() };
-        #[cfg(feature = "async")]
-        if let dictionary::EntryKind::AsyncBuiltin = eh.kind {
-            panic!("async execution is not supported by `process_line`, call `process_line_async` instead!")
-        }
+        let kind = unsafe { top.eh.as_ref().kind };
+        let res = unsafe { match kind {
+            EntryKind::StaticBuiltin => (top.eh.cast::<BuiltinEntry<T>>().as_ref().func)(self),
+            EntryKind::RuntimeBuiltin => (top.eh.cast::<BuiltinEntry<T>>().as_ref().func)(self),
+            EntryKind::Dictionary => (top.eh.cast::<DictionaryEntry<T>>().as_ref().func)(self),
+            EntryKind::AsyncBuiltin => {
+                return Err(Error::NoAsyncInNonAsyncSteppa);
+            },
+        }};
 
-        match (eh.func)(self) {
+        match res {
             Ok(_) => {
                 let _ = self.call_stack.pop();
             }
@@ -350,14 +357,15 @@ impl<T> Forth<T> {
             Err(e) => return Err(Error::Stack(e)),
         };
 
-        let eh = unsafe { top.eh.as_ref() };
-
-        let res = if let dictionary::EntryKind::AsyncBuiltin = eh.kind {
-            // if this is an async call, await it on this step
-            dispatcher.dispatch_async(&eh.name, self).await
-        } else {
-            (eh.func)(self)
-        };
+        let kind = unsafe { top.eh.as_ref().kind };
+        let res = unsafe { match kind {
+            EntryKind::StaticBuiltin => (top.eh.cast::<BuiltinEntry<T>>().as_ref().func)(self),
+            EntryKind::RuntimeBuiltin => (top.eh.cast::<BuiltinEntry<T>>().as_ref().func)(self),
+            EntryKind::Dictionary => (top.eh.cast::<DictionaryEntry<T>>().as_ref().func)(self),
+            EntryKind::AsyncBuiltin => {
+                dispatcher.dispatch_async(&top.eh.as_ref().name, self).await
+            },
+        }};
 
         match res {
             Ok(_) => {
@@ -536,7 +544,11 @@ impl<T> Forth<T> {
                 self.dict_alloc.bump_write(Word::ptr(de.as_ptr()))?;
                 *len += 1;
             }
-            Lookup::Builtin { bi } | Lookup::Async { bi } => {
+            Lookup::Builtin { bi } => {
+                self.dict_alloc.bump_write(Word::ptr(bi.as_ptr()))?;
+                *len += 1;
+            }
+            Lookup::Async { bi } => {
                 self.dict_alloc.bump_write(Word::ptr(bi.as_ptr()))?;
                 *len += 1;
             }
@@ -649,13 +661,14 @@ impl<T> Forth<T> {
         unsafe {
             dict_base.as_ptr().write(DictionaryEntry {
                 hdr: EntryHeader {
-                    // TODO: Should we look up `(constant)` for consistency?
-                    // Use `find_word`?
-                    func: Self::constant,
                     name,
                     kind: EntryKind::Dictionary,
                     len: 1,
+                    _pd: PhantomData,
                 },
+                // TODO: Should we look up `(constant)` for consistency?
+                // Use `find_word`?
+                func: Self::constant,
                 // Don't link until we know we have a "good" entry!
                 link: self.run_dict_tail.take(),
                 parameter_field: [],
@@ -679,13 +692,14 @@ impl<T> Forth<T> {
         unsafe {
             dict_base.as_ptr().write(DictionaryEntry {
                 hdr: EntryHeader {
-                    // TODO: Should we look up `(variable)` for consistency?
-                    // Use `find_word`?
-                    func: Self::variable,
                     name,
                     kind: EntryKind::Dictionary,
                     len: 1,
+                    _pd: PhantomData,
                 },
+                // TODO: Should we look up `(variable)` for consistency?
+                // Use `find_word`?
+                func: Self::variable,
                 // Don't link until we know we have a "good" entry!
                 link: self.run_dict_tail.take(),
                 parameter_field: [],
@@ -722,15 +736,17 @@ impl<T> Forth<T> {
         unsafe {
             dict_base.as_ptr().write(DictionaryEntry {
                 hdr: EntryHeader {
-                    // TODO: Should arrays push length and ptr? Or just ptr?
-                    //
-                    // TODO: Should we look up `(variable)` for consistency?
-                    // Use `find_word`?
-                    func: Self::variable,
                     name,
                     kind: EntryKind::Dictionary,
                     len: count_u16.into(),
+                    _pd: PhantomData
                 },
+                // TODO: Should arrays push length and ptr? Or just ptr?
+                //
+                // TODO: Should we look up `(variable)` for consistency?
+                // Use `find_word`?
+                func: Self::variable,
+
                 // Don't link until we know we have a "good" entry!
                 link: self.run_dict_tail.take(),
                 parameter_field: [],

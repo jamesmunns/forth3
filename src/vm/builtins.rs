@@ -1,4 +1,4 @@
-use core::{fmt::Write, mem::size_of};
+use core::{fmt::Write, mem::size_of, marker::PhantomData};
 
 use crate::{
     dictionary::{BuiltinEntry, DictionaryEntry, EntryHeader, EntryKind},
@@ -19,10 +19,11 @@ macro_rules! builtin {
         BuiltinEntry {
             hdr: EntryHeader {
                 name: comptime_fastr($name),
-                func: $func,
                 kind: EntryKind::StaticBuiltin,
                 len: 0,
+                _pd: core::marker::PhantomData,
             },
+            func: $func,
         }
     };
 }
@@ -725,13 +726,14 @@ impl<T: 'static> Forth<T> {
                         unsafe {
                             dict_base.as_ptr().write(DictionaryEntry {
                                 hdr: EntryHeader {
-                                    // TODO: Should we look up `(interpret)` for consistency?
-                                    // Use `find_word`?
-                                    func: Self::interpret,
                                     name,
                                     kind: EntryKind::Dictionary,
                                     len,
+                                    _pd: PhantomData,
                                 },
+                                // TODO: Should we look up `(interpret)` for consistency?
+                                // Use `find_word`?
+                                func: Self::interpret,
                                 // Don't link until we know we have a "good" entry!
                                 link: self.run_dict_tail.take(),
                                 parameter_field: [],
