@@ -243,6 +243,7 @@ pub mod test {
         leakbox::{LBForth, LBForthParams},
         word::Word,
         Forth,
+        Error,
     };
 
     #[derive(Default)]
@@ -251,12 +252,25 @@ pub mod test {
     }
 
     #[test]
-    fn forth() {
+    fn sizes() {
         use core::mem::{align_of, size_of};
         assert_eq!(5 * size_of::<usize>(), size_of::<DictionaryEntry<()>>());
         assert_eq!(5 * size_of::<usize>(), size_of::<DictionaryEntry<()>>());
         assert_eq!(1 * size_of::<usize>(), align_of::<Word>());
+    }
 
+    #[test]
+    fn forth() {
+        test_forth(|forth| forth.process_line())
+    }
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn async_forth() {
+        test_forth(|forth| futures::executor::block_on(forth.process_line_async()))
+    }
+
+    fn test_forth(mut process_line: impl FnMut(&mut Forth<TestContext>) -> Result<(), Error>) {
         let mut lbforth = LBForth::from_params(
             LBForthParams::default(),
             TestContext::default(),
@@ -318,25 +332,25 @@ pub mod test {
         for (line, out) in lines {
             println!("{}", line);
             forth.input.fill(line).unwrap();
-            forth.process_line().unwrap();
+            process_line(forth).unwrap();
             print!(" => {}", forth.output.as_str());
             assert_eq!(forth.output.as_str(), *out);
             forth.output.clear();
         }
 
         forth.input.fill(": derp boop yay").unwrap();
-        assert!(forth.process_line().is_err());
+        assert!(process_line(forth).is_err());
         // TODO: Should handle this automatically...
         forth.return_stack.clear();
 
         forth.input.fill(": doot yay yaay").unwrap();
-        assert!(forth.process_line().is_err());
+        assert!(process_line(forth).is_err());
         // TODO: Should handle this automatically...
         forth.return_stack.clear();
 
         forth.output.clear();
         forth.input.fill("boop yay").unwrap();
-        forth.process_line().unwrap();
+        process_line(forth).unwrap();
         assert_eq!(forth.output.as_str(), "5 5 5 ok.\n");
 
         let mut any_stacks = false;
@@ -380,7 +394,7 @@ pub mod test {
         for (line, out) in lines {
             println!("{}", line);
             forth.input.fill(line).unwrap();
-            forth.process_line().unwrap();
+            process_line(forth).unwrap();
             print!(" => {}", forth.output.as_str());
             assert_eq!(forth.output.as_str(), *out);
             forth.output.clear();

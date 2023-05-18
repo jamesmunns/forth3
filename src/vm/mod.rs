@@ -4,7 +4,7 @@ use core::{
     ops::{Deref, Neg},
     ptr::NonNull,
     str::FromStr,
-    task::Poll,
+    task::{Context, Poll},
 };
 
 use crate::{
@@ -38,6 +38,12 @@ pub struct Forth<T: 'static> {
     pub output: OutputBuf,
     pub host_ctxt: T,
     builtins: &'static [BuiltinEntry<T>],
+}
+
+enum ProcessAction {
+    Continue,
+    Execute,
+    Done,
 }
 
 impl<T> Forth<T> {
@@ -167,7 +173,21 @@ impl<T> Forth<T> {
     }
 
     pub fn process_line(&mut self) -> Result<(), Error> {
-        match self.process_line_inner() {
+        let res = (|| {
+            loop {
+                match self.start_processing_line()? {
+                    ProcessAction::Done => {
+                        self.output.push_str("ok.\n")?;
+                        break Ok(());
+                    },
+                    ProcessAction::Continue => {},
+                    ProcessAction::Execute =>
+                        // Loop until execution completes.
+                        while self.steppa_pig(None)?.is_pending() {},
+                }
+            }
+        })();
+        match res {
             Ok(_) => Ok(()),
             Err(e) => {
                 self.data_stack.clear();
@@ -178,72 +198,99 @@ impl<T> Forth<T> {
         }
     }
 
-    fn process_line_inner(&mut self) -> Result<(), Error> {
-        loop {
-            self.input.advance();
-            let word = match self.input.cur_word() {
-                Some(w) => w,
-                None => break,
-            };
-
-            match self.lookup(word)? {
-                Lookup::Dict { de } => {
-                    let dref = unsafe { de.as_ref() };
-                    self.call_stack.push(CallContext {
-                        eh: de.cast(),
-                        idx: 0,
-                        len: dref.hdr.len,
-                    })?;
-
-                    while self.steppa_pig()?.is_pending() {}
-                }
-                Lookup::Builtin { bi } => {
-                    self.call_stack.push(CallContext {
-                        eh: bi.cast(),
-                        idx: 0,
-                        len: 0,
-                    })?;
-
-                    while self.steppa_pig()?.is_pending() {}
-                }
-                Lookup::Literal { val } => {
-                    self.data_stack.push(Word::data(val))?;
-                }
-                #[cfg(feature = "floats")]
-                Lookup::LiteralF { val } => {
-                    self.data_stack.push(Word::float(val))?;
-                }
-                Lookup::LParen => {
-                    self.munch_comment(&mut 0)?;
-                }
-                Lookup::Semicolon => return Err(Error::InterpretingCompileOnlyWord),
-                Lookup::If => return Err(Error::InterpretingCompileOnlyWord),
-                Lookup::Else => return Err(Error::InterpretingCompileOnlyWord),
-                Lookup::Then => return Err(Error::InterpretingCompileOnlyWord),
-                Lookup::Do => return Err(Error::InterpretingCompileOnlyWord),
-                Lookup::Loop => return Err(Error::InterpretingCompileOnlyWord),
-                Lookup::LQuote => {
-                    self.input.advance_str().replace_err(Error::BadStrLiteral)?;
-                    let lit = self.input.cur_str_literal().unwrap();
-                    self.output.push_str(lit)?;
-                }
-                Lookup::Constant => {
-                    self.munch_constant(&mut 0)?;
-                }
-                Lookup::Variable => {
-                    self.munch_variable(&mut 0)?;
-                }
-                Lookup::Array => {
-                    self.munch_array(&mut 0)?;
+    #[cfg(feature = "async")]
+    pub async fn process_line_async(&mut self) -> Result<(), Error> {
+        let res = async {
+            loop {
+                match self.start_processing_line()? {
+                    ProcessAction::Done => {
+                        self.output.push_str("ok.\n")?;
+                        break Ok(());
+                    },
+                    ProcessAction::Continue => {},
+                    ProcessAction::Execute =>
+                        // Poll `steppa_pig` until execution completes.
+                        futures_util::future::poll_fn(|cx| self.steppa_pig(Some(cx))).await?,
                 }
             }
+        }.await;
+        match res {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                self.data_stack.clear();
+                self.return_stack.clear();
+                self.call_stack.clear();
+                Err(e)
+            }
         }
-        self.output.push_str("ok.\n")?;
-        Ok(())
+    }
+
+    /// Returns `true` if we must call `steppa_pig` until it returns `Ready`,
+    /// false if not.
+    fn start_processing_line(&mut self) -> Result<ProcessAction, Error> {
+        self.input.advance();
+        let word = match self.input.cur_word() {
+            Some(w) => w,
+            None => return Ok(ProcessAction::Done),
+        };
+
+        match self.lookup(word)? {
+            Lookup::Dict { de } => {
+                let dref = unsafe { de.as_ref() };
+                self.call_stack.push(CallContext {
+                    eh: de.cast(),
+                    idx: 0,
+                    len: dref.hdr.len,
+                })?;
+
+                return Ok(ProcessAction::Execute);
+            }
+            Lookup::Builtin { bi } => {
+                self.call_stack.push(CallContext {
+                    eh: bi.cast(),
+                    idx: 0,
+                    len: 0,
+                })?;
+
+                return Ok(ProcessAction::Execute);
+            }
+            Lookup::Literal { val } => {
+                self.data_stack.push(Word::data(val))?;
+            }
+            #[cfg(feature = "floats")]
+            Lookup::LiteralF { val } => {
+                self.data_stack.push(Word::float(val))?;
+            }
+            Lookup::LParen => {
+                self.munch_comment(&mut 0)?;
+            }
+            Lookup::Semicolon => return Err(Error::InterpretingCompileOnlyWord),
+            Lookup::If => return Err(Error::InterpretingCompileOnlyWord),
+            Lookup::Else => return Err(Error::InterpretingCompileOnlyWord),
+            Lookup::Then => return Err(Error::InterpretingCompileOnlyWord),
+            Lookup::Do => return Err(Error::InterpretingCompileOnlyWord),
+            Lookup::Loop => return Err(Error::InterpretingCompileOnlyWord),
+            Lookup::LQuote => {
+                self.input.advance_str().replace_err(Error::BadStrLiteral)?;
+                let lit = self.input.cur_str_literal().unwrap();
+                self.output.push_str(lit)?;
+            }
+            Lookup::Constant => {
+                self.munch_constant(&mut 0)?;
+            }
+            Lookup::Variable => {
+                self.munch_variable(&mut 0)?;
+            }
+            Lookup::Array => {
+                self.munch_array(&mut 0)?;
+            }
+        }
+
+        Ok(ProcessAction::Continue)
     }
 
     // Single step execution
-    fn steppa_pig(&mut self) -> Poll<Result<(), Error>> {
+    fn steppa_pig(&mut self, cx: Option<&mut Context<'_>>) -> Poll<Result<(), Error>> {
         let top = match self.call_stack.try_peek() {
             Ok(t) => t,
             Err(StackError::StackEmpty) => return Poll::Ready(Ok(())),
@@ -262,6 +309,13 @@ impl<T> Forth<T> {
             Err(e) => return Poll::Ready(Err(e)),
         }
 
+        if let Some(cx) = cx {
+            // TODO(eliza): we shouldn't actually round trip through the
+            // scheduler on every single step...distinguish between pending due
+            // to needing to step again and pending due to needing to wait on an
+            // async builtin (in which case, the builtin will wake us).
+            cx.waker().wake_by_ref();
+        }
         Poll::Pending
     }
 
