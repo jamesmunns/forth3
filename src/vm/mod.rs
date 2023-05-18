@@ -4,6 +4,7 @@ use core::{
     ops::{Deref, Neg},
     ptr::NonNull,
     str::FromStr,
+    task::Poll,
 };
 
 use crate::{
@@ -19,11 +20,6 @@ use crate::{
 };
 
 pub mod builtins;
-
-pub enum Done {
-    Done,
-    NotDone,
-}
 
 /// Forth is the "context" of the VM/interpreter.
 ///
@@ -199,15 +195,7 @@ impl<T> Forth<T> {
                         len: dref.hdr.len,
                     })?;
 
-                    let res = loop {
-                        match self.steppa_pig() {
-                            Ok(Done::Done) => break Ok(()),
-                            Ok(Done::NotDone) => {}
-                            Err(e) => break Err(e),
-                        }
-                    };
-
-                    res?;
+                    while self.steppa_pig()?.is_pending() {}
                 }
                 Lookup::Builtin { bi } => {
                     self.call_stack.push(CallContext {
@@ -216,15 +204,7 @@ impl<T> Forth<T> {
                         len: 0,
                     })?;
 
-                    let res = loop {
-                        match self.steppa_pig() {
-                            Ok(Done::Done) => break Ok(()),
-                            Ok(Done::NotDone) => {}
-                            Err(e) => break Err(e),
-                        }
-                    };
-
-                    res?;
+                    while self.steppa_pig()?.is_pending() {}
                 }
                 Lookup::Literal { val } => {
                     self.data_stack.push(Word::data(val))?;
@@ -263,11 +243,11 @@ impl<T> Forth<T> {
     }
 
     // Single step execution
-    fn steppa_pig(&mut self) -> Result<Done, Error> {
+    fn steppa_pig(&mut self) -> Poll<Result<(), Error>> {
         let top = match self.call_stack.try_peek() {
             Ok(t) => t,
-            Err(StackError::StackEmpty) => return Ok(Done::Done),
-            Err(e) => return Err(Error::Stack(e)),
+            Err(StackError::StackEmpty) => return Poll::Ready(Ok(())),
+            Err(e) => return Poll::Ready(Err(Error::Stack(e))),
         };
 
         let eh = unsafe { top.eh.as_ref() };
@@ -279,10 +259,10 @@ impl<T> Forth<T> {
             Err(Error::PendingCallAgain) => {
                 // ok, just don't pop
             }
-            Err(e) => return Err(e),
+            Err(e) => return Poll::Ready(Err(e)),
         }
 
-        Ok(Done::NotDone)
+        Poll::Pending
     }
 
     /// Interpret is the run-time target of the `:` (colon) word.
