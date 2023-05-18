@@ -16,6 +16,7 @@ pub enum EntryKind {
     StaticBuiltin,
     RuntimeBuiltin,
     Dictionary,
+    AsyncBuiltin(u8),
 }
 
 #[repr(C)]
@@ -48,6 +49,11 @@ pub struct DictionaryBump {
     pub(crate) start: *mut u8,
     pub(crate) cur: *mut u8,
     pub(crate) end: *mut u8,
+}
+
+pub trait DispatchAsync<T> {
+    type Future: core::future::Future<Output = Result<(), crate::Error>>;
+    fn dispatch_async(&self, id: u8, forth: &mut crate::Forth<T>) -> Self::Future;
 }
 
 impl<T: 'static> DictionaryEntry<T> {

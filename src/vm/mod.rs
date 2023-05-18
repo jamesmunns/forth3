@@ -10,6 +10,7 @@ use core::{
 use crate::{
     dictionary::{
         BuiltinEntry, BumpError, DictionaryBump, DictionaryEntry, EntryHeader, EntryKind,
+        DispatchAsync, self,
     },
     fastr::{FaStr, TmpFaStr},
     input::WordStrBuf,
@@ -44,6 +45,12 @@ enum ProcessAction {
     Continue,
     Execute,
     Done,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum Step {
+    Done,
+    NotDone,
 }
 
 impl<T> Forth<T> {
@@ -183,7 +190,7 @@ impl<T> Forth<T> {
                     ProcessAction::Continue => {},
                     ProcessAction::Execute =>
                         // Loop until execution completes.
-                        while self.steppa_pig(None)?.is_pending() {},
+                        while self.steppa_pig()? != Step::Done {},
                 }
             }
         })();
@@ -199,7 +206,7 @@ impl<T> Forth<T> {
     }
 
     #[cfg(feature = "async")]
-    pub async fn process_line_async(&mut self) -> Result<(), Error> {
+    pub async fn process_line_async(&mut self, dispatcher: &impl DispatchAsync<T>) -> Result<(), Error> {
         let res = async {
             loop {
                 match self.start_processing_line()? {
@@ -209,8 +216,7 @@ impl<T> Forth<T> {
                     },
                     ProcessAction::Continue => {},
                     ProcessAction::Execute =>
-                        // Poll `steppa_pig` until execution completes.
-                        futures_util::future::poll_fn(|cx| self.steppa_pig(Some(cx))).await?,
+                        while self.async_pig(dispatcher).await? != Step::Done {},
                 }
             }
         }.await;
@@ -290,14 +296,18 @@ impl<T> Forth<T> {
     }
 
     // Single step execution
-    fn steppa_pig(&mut self, cx: Option<&mut Context<'_>>) -> Poll<Result<(), Error>> {
+    fn steppa_pig(&mut self,) -> Result<Step, Error> {
         let top = match self.call_stack.try_peek() {
             Ok(t) => t,
-            Err(StackError::StackEmpty) => return Poll::Ready(Ok(())),
-            Err(e) => return Poll::Ready(Err(Error::Stack(e))),
+            Err(StackError::StackEmpty) => return Ok(Step::Done),
+            Err(e) => return Err(Error::Stack(e)),
         };
 
         let eh = unsafe { top.eh.as_ref() };
+        #[cfg(feature = "async")]
+        if let dictionary::EntryKind::AsyncBuiltin(_) = eh.kind {
+            panic!("async execution is not supported by `process_line`, call `process_line_async` instead!")
+        }
 
         match (eh.func)(self) {
             Ok(_) => {
@@ -306,18 +316,43 @@ impl<T> Forth<T> {
             Err(Error::PendingCallAgain) => {
                 // ok, just don't pop
             }
-            Err(e) => return Poll::Ready(Err(e)),
+            Err(e) => return Err(e),
         }
 
-        if let Some(cx) = cx {
-            // TODO(eliza): we shouldn't actually round trip through the
-            // scheduler on every single step...distinguish between pending due
-            // to needing to step again and pending due to needing to wait on an
-            // async builtin (in which case, the builtin will wake us).
-            cx.waker().wake_by_ref();
-        }
-        Poll::Pending
+        Ok(Step::NotDone)
     }
+
+    // Single step execution (async version).
+    #[cfg(feature = "async")]
+    async fn async_pig(&mut self, dispatcher: &impl DispatchAsync<T>) -> Result<Step, Error> {
+        let top = match self.call_stack.try_peek() {
+            Ok(t) => t,
+            Err(StackError::StackEmpty) => return Ok(Step::Done),
+            Err(e) => return Err(Error::Stack(e)),
+        };
+
+        let eh = unsafe { top.eh.as_ref() };
+
+        let res = if let dictionary::EntryKind::AsyncBuiltin(id) = eh.kind {
+            // if this is an async call, await it on this step
+            dispatcher.dispatch_async(id, self).await
+        } else {
+            (eh.func)(self)
+        };
+
+        match res {
+            Ok(_) => {
+                let _ = self.call_stack.pop();
+            }
+            Err(Error::PendingCallAgain) => {
+                // ok, just don't pop
+            }
+            Err(e) => return Err(e),
+        }
+
+        Ok(Step::NotDone)
+    }
+
 
     /// Interpret is the run-time target of the `:` (colon) word.
     pub fn interpret(&mut self) -> Result<(), Error> {

@@ -128,6 +128,7 @@ impl<T: 'static> CallContext<T> {
         match eh.kind {
             EntryKind::StaticBuiltin => Err(Error::BuiltinHasNoNextValue),
             EntryKind::RuntimeBuiltin => Err(Error::BuiltinHasNoNextValue),
+            EntryKind::AsyncBuiltin(_) => Err(Error::BuiltinHasNoNextValue),
             EntryKind::Dictionary => unsafe {
                 let de = self.eh.cast::<DictionaryEntry<T>>();
                 let start = DictionaryEntry::pfa(de).as_ptr().add(req_start as usize);
@@ -149,6 +150,7 @@ impl<T: 'static> CallContext<T> {
         match eh.kind {
             EntryKind::StaticBuiltin => Err(Error::BuiltinHasNoNextValue),
             EntryKind::RuntimeBuiltin => Err(Error::BuiltinHasNoNextValue),
+            EntryKind::AsyncBuiltin(_) => Err(Error::BuiltinHasNoNextValue),
             EntryKind::Dictionary => unsafe {
                 let de = self.eh.cast::<DictionaryEntry<T>>();
                 let val_ptr = DictionaryEntry::pfa(de).as_ptr().add(self.idx as usize);
@@ -179,6 +181,7 @@ impl<T: 'static> CallContext<T> {
         match eh.kind {
             EntryKind::StaticBuiltin => None,
             EntryKind::RuntimeBuiltin => None,
+            EntryKind::AsyncBuiltin(_) => None,
             EntryKind::Dictionary => unsafe {
                 let de = self.eh.cast::<DictionaryEntry<T>>();
                 Some(&*DictionaryEntry::pfa(de).as_ptr().add(self.idx as usize))
@@ -267,7 +270,20 @@ pub mod test {
     #[cfg(feature = "async")]
     #[test]
     fn async_forth() {
-        test_forth(|forth| futures::executor::block_on(forth.process_line_async()))
+        use crate::dictionary::DispatchAsync;
+
+        struct TestAsyncDispatcher;
+        impl DispatchAsync<TestContext> for TestAsyncDispatcher {
+            type Future = futures::future::Ready<Result<(), Error>>;
+            fn dispatch_async(
+                &self,
+                _id: u8,
+                _forth: &mut Forth<TestContext>,
+            ) -> Self::Future {
+               todo!("eliza: actually test this...")
+            }
+        }
+        test_forth(|forth| futures::executor::block_on(forth.process_line_async(&TestAsyncDispatcher)))
     }
 
     fn test_forth(mut process_line: impl FnMut(&mut Forth<TestContext>) -> Result<(), Error>) {
