@@ -271,24 +271,24 @@ pub mod test {
         test_forth(|forth| forth.process_line())
     }
 
-    // #[cfg(feature = "async")]
-    // #[test]
-    // fn async_forth() {
-    //     use crate::dictionary::DispatchAsync;
+    #[cfg(feature = "async")]
+    #[test]
+    fn async_forth() {
+        use crate::{dictionary::DispatchAsync, fastr::FaStr};
 
-    //     struct TestAsyncDispatcher;
-    //     impl DispatchAsync<TestContext> for TestAsyncDispatcher {
-    //         type Future = futures::future::Ready<Result<(), Error>>;
-    //         fn dispatch_async(
-    //             &self,
-    //             _id: u8,
-    //             _forth: &mut Forth<TestContext>,
-    //         ) -> Self::Future {
-    //            todo!("eliza: actually test this...")
-    //         }
-    //     }
-    //     test_forth(|forth| futures::executor::block_on(forth.process_line_async(&TestAsyncDispatcher)))
-    // }
+        struct TestAsyncDispatcher;
+        impl DispatchAsync<TestContext> for TestAsyncDispatcher {
+            type Future = futures::future::Ready<Result<(), Error>>;
+            fn dispatch_async(
+                &self,
+                _id: &FaStr,
+                _forth: &mut Forth<TestContext>,
+            ) -> Self::Future {
+               todo!("eliza: actually test this...")
+            }
+        }
+        test_forth(|forth| futures::executor::block_on(forth.process_line_async(&TestAsyncDispatcher)))
+    }
 
     fn test_forth(mut process_line: impl FnMut(&mut Forth<TestContext>) -> Result<(), Error>) {
         let mut lbforth = LBForth::from_params(
