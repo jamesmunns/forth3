@@ -82,6 +82,7 @@ impl<T: 'static> LBForth<T> {
         params: LBForthParams,
         host_ctxt: T,
         builtins: &'static [BuiltinEntry<T>],
+        async_builtins: &'static [BuiltinEntry<T>],
     ) -> Self {
         let _payload_dstack: LeakBox<Word> = LeakBox::new(params.data_stack_elems);
         let _payload_rstack: LeakBox<Word> = LeakBox::new(params.return_stack_elems);
@@ -102,6 +103,7 @@ impl<T: 'static> LBForth<T> {
                 output,
                 host_ctxt,
                 builtins,
+                async_builtins,
             )
             .unwrap()
         };

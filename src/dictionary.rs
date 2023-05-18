@@ -16,7 +16,7 @@ pub enum EntryKind {
     StaticBuiltin,
     RuntimeBuiltin,
     Dictionary,
-    AsyncBuiltin(u8),
+    AsyncBuiltin,
 }
 
 #[repr(C)]
@@ -29,6 +29,8 @@ pub struct EntryHeader<T: 'static> {
 
 #[repr(C)]
 pub struct BuiltinEntry<T: 'static> {
+    // TODO(AJM): This should not be pub, if I decide to make async bis "special"
+    // ESPECIALLY if I rely on them being filled with "|| Err(())" functions
     pub hdr: EntryHeader<T>,
 }
 
@@ -53,7 +55,7 @@ pub struct DictionaryBump {
 
 pub trait DispatchAsync<T> {
     type Future: core::future::Future<Output = Result<(), crate::Error>>;
-    fn dispatch_async(&self, id: u8, forth: &mut crate::Forth<T>) -> Self::Future;
+    fn dispatch_async(&self, id: &FaStr, forth: &mut crate::Forth<T>) -> Self::Future;
 }
 
 impl<T: 'static> DictionaryEntry<T> {

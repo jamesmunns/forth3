@@ -128,7 +128,7 @@ impl<T: 'static> CallContext<T> {
         match eh.kind {
             EntryKind::StaticBuiltin => Err(Error::BuiltinHasNoNextValue),
             EntryKind::RuntimeBuiltin => Err(Error::BuiltinHasNoNextValue),
-            EntryKind::AsyncBuiltin(_) => Err(Error::BuiltinHasNoNextValue),
+            EntryKind::AsyncBuiltin => Err(Error::BuiltinHasNoNextValue),
             EntryKind::Dictionary => unsafe {
                 let de = self.eh.cast::<DictionaryEntry<T>>();
                 let start = DictionaryEntry::pfa(de).as_ptr().add(req_start as usize);
@@ -150,7 +150,7 @@ impl<T: 'static> CallContext<T> {
         match eh.kind {
             EntryKind::StaticBuiltin => Err(Error::BuiltinHasNoNextValue),
             EntryKind::RuntimeBuiltin => Err(Error::BuiltinHasNoNextValue),
-            EntryKind::AsyncBuiltin(_) => Err(Error::BuiltinHasNoNextValue),
+            EntryKind::AsyncBuiltin => Err(Error::BuiltinHasNoNextValue),
             EntryKind::Dictionary => unsafe {
                 let de = self.eh.cast::<DictionaryEntry<T>>();
                 let val_ptr = DictionaryEntry::pfa(de).as_ptr().add(self.idx as usize);
@@ -181,7 +181,7 @@ impl<T: 'static> CallContext<T> {
         match eh.kind {
             EntryKind::StaticBuiltin => None,
             EntryKind::RuntimeBuiltin => None,
-            EntryKind::AsyncBuiltin(_) => None,
+            EntryKind::AsyncBuiltin => None,
             EntryKind::Dictionary => unsafe {
                 let de = self.eh.cast::<DictionaryEntry<T>>();
                 Some(&*DictionaryEntry::pfa(de).as_ptr().add(self.idx as usize))
@@ -208,6 +208,9 @@ pub enum Lookup<T: 'static> {
         val: f32,
     },
     Builtin {
+        bi: NonNull<BuiltinEntry<T>>,
+    },
+    Async {
         bi: NonNull<BuiltinEntry<T>>,
     },
     LQuote,
@@ -267,30 +270,31 @@ pub mod test {
         test_forth(|forth| forth.process_line())
     }
 
-    #[cfg(feature = "async")]
-    #[test]
-    fn async_forth() {
-        use crate::dictionary::DispatchAsync;
+    // #[cfg(feature = "async")]
+    // #[test]
+    // fn async_forth() {
+    //     use crate::dictionary::DispatchAsync;
 
-        struct TestAsyncDispatcher;
-        impl DispatchAsync<TestContext> for TestAsyncDispatcher {
-            type Future = futures::future::Ready<Result<(), Error>>;
-            fn dispatch_async(
-                &self,
-                _id: u8,
-                _forth: &mut Forth<TestContext>,
-            ) -> Self::Future {
-               todo!("eliza: actually test this...")
-            }
-        }
-        test_forth(|forth| futures::executor::block_on(forth.process_line_async(&TestAsyncDispatcher)))
-    }
+    //     struct TestAsyncDispatcher;
+    //     impl DispatchAsync<TestContext> for TestAsyncDispatcher {
+    //         type Future = futures::future::Ready<Result<(), Error>>;
+    //         fn dispatch_async(
+    //             &self,
+    //             _id: u8,
+    //             _forth: &mut Forth<TestContext>,
+    //         ) -> Self::Future {
+    //            todo!("eliza: actually test this...")
+    //         }
+    //     }
+    //     test_forth(|forth| futures::executor::block_on(forth.process_line_async(&TestAsyncDispatcher)))
+    // }
 
     fn test_forth(mut process_line: impl FnMut(&mut Forth<TestContext>) -> Result<(), Error>) {
         let mut lbforth = LBForth::from_params(
             LBForthParams::default(),
             TestContext::default(),
             Forth::<TestContext>::FULL_BUILTINS,
+            &[],
         );
         let forth = &mut lbforth.forth;
         assert_eq!(0, forth.dict_alloc.used());

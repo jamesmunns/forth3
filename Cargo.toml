@@ -16,14 +16,5 @@ use-std = []
 floats = []
 async = ["futures-util"]
 
-# [dependencies.serde]
-# version = "1.0.152"
-# default-features = false
-# features = ["derive"]
-
-# [dependencies.postcard]
-# version = "1.0.2"
-# default-features = false
-
 [dev-dependencies]
 futures = "0.3.28"

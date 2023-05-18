@@ -4,7 +4,7 @@ use core::{
     ops::{Deref, Neg},
     ptr::NonNull,
     str::FromStr,
-    task::{Context, Poll},
+    // task::{Context, Poll},
 };
 
 use crate::{
@@ -39,6 +39,7 @@ pub struct Forth<T: 'static> {
     pub output: OutputBuf,
     pub host_ctxt: T,
     builtins: &'static [BuiltinEntry<T>],
+    async_builtins: &'static [BuiltinEntry<T>],
 }
 
 enum ProcessAction {
@@ -63,6 +64,7 @@ impl<T> Forth<T> {
         output: OutputBuf,
         host_ctxt: T,
         builtins: &'static [BuiltinEntry<T>],
+        async_builtins: &'static [BuiltinEntry<T>],
     ) -> Result<Self, Error> {
         let data_stack = Stack::new(dstack_buf.0, dstack_buf.1);
         let return_stack = Stack::new(rstack_buf.0, rstack_buf.1);
@@ -80,6 +82,7 @@ impl<T> Forth<T> {
             output,
             host_ctxt,
             builtins,
+            async_builtins,
         })
     }
 
@@ -127,6 +130,13 @@ impl<T> Forth<T> {
             .or_else(|| self.find_in_bis(&fastr).map(NonNull::cast))
     }
 
+    fn find_in_async_bis(&self, fastr: &TmpFaStr<'_>) -> Option<NonNull<BuiltinEntry<T>>> {
+        self.async_builtins
+            .iter()
+            .find(|bi| &bi.hdr.name == fastr.deref())
+            .map(NonNull::from)
+    }
+
     fn find_in_bis(&self, fastr: &TmpFaStr<'_>) -> Option<NonNull<BuiltinEntry<T>>> {
         self.builtins
             .iter()
@@ -165,6 +175,8 @@ impl<T> Forth<T> {
                     Ok(Lookup::Dict { de: entry })
                 } else if let Some(bis) = self.find_in_bis(&fastr) {
                     Ok(Lookup::Builtin { bi: bis })
+                } else if let Some(async_bi) = self.find_in_async_bis(&fastr) {
+                    Ok(Lookup::Async { bi: NonNull::from(async_bi) })
                 } else if let Some(val) = Self::parse_num(word) {
                     Ok(Lookup::Literal { val })
                 } else {
@@ -260,6 +272,13 @@ impl<T> Forth<T> {
 
                 return Ok(ProcessAction::Execute);
             }
+            Lookup::Async { bi } => {
+                self.call_stack.push(CallContext {
+                    eh: bi.cast(),
+                    idx: 0,
+                    len: 0,
+                })?;
+            },
             Lookup::Literal { val } => {
                 self.data_stack.push(Word::data(val))?;
             }
@@ -305,7 +324,7 @@ impl<T> Forth<T> {
 
         let eh = unsafe { top.eh.as_ref() };
         #[cfg(feature = "async")]
-        if let dictionary::EntryKind::AsyncBuiltin(_) = eh.kind {
+        if let dictionary::EntryKind::AsyncBuiltin = eh.kind {
             panic!("async execution is not supported by `process_line`, call `process_line_async` instead!")
         }
 
@@ -333,9 +352,9 @@ impl<T> Forth<T> {
 
         let eh = unsafe { top.eh.as_ref() };
 
-        let res = if let dictionary::EntryKind::AsyncBuiltin(id) = eh.kind {
+        let res = if let dictionary::EntryKind::AsyncBuiltin = eh.kind {
             // if this is an async call, await it on this step
-            dispatcher.dispatch_async(id, self).await
+            dispatcher.dispatch_async(&eh.name, self).await
         } else {
             (eh.func)(self)
         };
@@ -517,7 +536,7 @@ impl<T> Forth<T> {
                 self.dict_alloc.bump_write(Word::ptr(de.as_ptr()))?;
                 *len += 1;
             }
-            Lookup::Builtin { bi } => {
+            Lookup::Builtin { bi } | Lookup::Async { bi } => {
                 self.dict_alloc.bump_write(Word::ptr(bi.as_ptr()))?;
                 *len += 1;
             }
