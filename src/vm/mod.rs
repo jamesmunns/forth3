@@ -9,7 +9,7 @@ use core::{
 
 use crate::{
     dictionary::{
-        BuiltinEntry, BumpError, DictionaryBump, DictionaryEntry, EntryHeader, EntryKind, AsyncBuiltinEntry,
+        BuiltinEntry, BumpError, DictionaryBump, DictionaryEntry, EntryHeader, EntryKind,
     },
     fastr::{FaStr, TmpFaStr},
     input::WordStrBuf,
@@ -20,7 +20,7 @@ use crate::{
 };
 
 #[cfg(feature = "async")]
-use crate::dictionary::DispatchAsync;
+use crate::dictionary::{AsyncBuiltinEntry, DispatchAsync};
 
 pub mod builtins;
 
@@ -41,6 +41,7 @@ pub struct Forth<T: 'static> {
     pub output: OutputBuf,
     pub host_ctxt: T,
     builtins: &'static [BuiltinEntry<T>],
+    #[cfg(feature = "async")]
     async_builtins: &'static [AsyncBuiltinEntry<T>],
 }
 
@@ -58,6 +59,39 @@ enum Step {
 
 impl<T> Forth<T> {
     pub unsafe fn new(
+        dstack_buf: (*mut Word, usize),
+        rstack_buf: (*mut Word, usize),
+        cstack_buf: (*mut CallContext<T>, usize),
+        dict_buf: (*mut u8, usize),
+        input: WordStrBuf,
+        output: OutputBuf,
+        host_ctxt: T,
+        builtins: &'static [BuiltinEntry<T>],
+    ) -> Result<Self, Error> {
+        let data_stack = Stack::new(dstack_buf.0, dstack_buf.1);
+        let return_stack = Stack::new(rstack_buf.0, rstack_buf.1);
+        let call_stack = Stack::new(cstack_buf.0, cstack_buf.1);
+        let dict_alloc = DictionaryBump::new(dict_buf.0, dict_buf.1);
+
+        Ok(Self {
+            mode: Mode::Run,
+            data_stack,
+            return_stack,
+            call_stack,
+            dict_alloc,
+            run_dict_tail: None,
+            input,
+            output,
+            host_ctxt,
+            builtins,
+
+            #[cfg(feature = "async")]
+            async_builtins: &[],
+        })
+    }
+
+    #[cfg(feature = "async")]
+    pub unsafe fn new_async(
         dstack_buf: (*mut Word, usize),
         rstack_buf: (*mut Word, usize),
         cstack_buf: (*mut CallContext<T>, usize),
@@ -133,6 +167,7 @@ impl<T> Forth<T> {
             .or_else(|| self.find_in_bis(&fastr).map(NonNull::cast))
     }
 
+    #[cfg(feature = "async")]
     fn find_in_async_bis(&self, fastr: &TmpFaStr<'_>) -> Option<NonNull<AsyncBuiltinEntry<T>>> {
         self.async_builtins
             .iter()
@@ -175,21 +210,27 @@ impl<T> Forth<T> {
             _ => {
                 let fastr = TmpFaStr::new_from(word);
                 if let Some(entry) = self.find_in_dict(&fastr) {
-                    Ok(Lookup::Dict { de: entry })
-                } else if let Some(bis) = self.find_in_bis(&fastr) {
-                    Ok(Lookup::Builtin { bi: bis })
-                } else if let Some(async_bi) = self.find_in_async_bis(&fastr) {
-                    Ok(Lookup::Async { bi: NonNull::from(async_bi) })
-                } else if let Some(val) = Self::parse_num(word) {
-                    Ok(Lookup::Literal { val })
-                } else {
-                    #[cfg(feature = "floats")]
-                    if let Ok(fv) = word.parse::<f32>() {
-                        return Ok(Lookup::LiteralF { val: fv });
-                    }
-
-                    Err(Error::LookupFailed)
+                    return Ok(Lookup::Dict { de: entry });
                 }
+                if let Some(bis) = self.find_in_bis(&fastr) {
+                    return Ok(Lookup::Builtin { bi: bis });
+                }
+
+                #[cfg(feature = "async")]
+                if let Some(bi) = self.find_in_async_bis(&fastr) {
+                    return Ok(Lookup::Async { bi });
+                }
+
+                if let Some(val) = Self::parse_num(word) {
+                    return Ok(Lookup::Literal { val });
+                }
+
+                #[cfg(feature = "floats")]
+                if let Ok(fv) = word.parse::<f32>() {
+                    return Ok(Lookup::LiteralF { val: fv });
+                }
+
+                Err(Error::LookupFailed)
             }
         }
     }
@@ -275,6 +316,7 @@ impl<T> Forth<T> {
 
                 return Ok(ProcessAction::Execute);
             }
+            #[cfg(feature = "async")]
             Lookup::Async { bi } => {
                 self.call_stack.push(CallContext {
                     eh: bi.cast(),
@@ -332,6 +374,8 @@ impl<T> Forth<T> {
             EntryKind::StaticBuiltin => (top.eh.cast::<BuiltinEntry<T>>().as_ref().func)(self),
             EntryKind::RuntimeBuiltin => (top.eh.cast::<BuiltinEntry<T>>().as_ref().func)(self),
             EntryKind::Dictionary => (top.eh.cast::<DictionaryEntry<T>>().as_ref().func)(self),
+
+            #[cfg(feature = "async")]
             EntryKind::AsyncBuiltin => {
                 return Err(Error::NoAsyncInNonAsyncSteppa);
             },
@@ -550,6 +594,7 @@ impl<T> Forth<T> {
                 self.dict_alloc.bump_write(Word::ptr(bi.as_ptr()))?;
                 *len += 1;
             }
+            #[cfg(feature = "async")]
             Lookup::Async { bi } => {
                 self.dict_alloc.bump_write(Word::ptr(bi.as_ptr()))?;
                 *len += 1;

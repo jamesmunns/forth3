@@ -17,6 +17,7 @@ pub enum EntryKind {
     StaticBuiltin,
     RuntimeBuiltin,
     Dictionary,
+    #[cfg(feature = "async")]
     AsyncBuiltin,
 }
 
@@ -35,6 +36,7 @@ pub struct BuiltinEntry<T: 'static> {
 }
 
 #[repr(C)]
+#[cfg(feature = "async")]
 pub struct AsyncBuiltinEntry<T: 'static> {
     pub hdr: EntryHeader<T>,
 }
@@ -59,6 +61,7 @@ pub struct DictionaryBump {
     pub(crate) end: *mut u8,
 }
 
+#[cfg(feature = "async")]
 pub trait DispatchAsync<'forth, T> {
     type Future: core::future::Future<Output = Result<(), crate::Error>>;
     fn dispatch_async(&self, id: &FaStr, forth: &'forth mut crate::Forth<T>) -> Self::Future;
@@ -177,10 +180,13 @@ pub mod test {
     use std::alloc::Layout;
 
     use crate::{
-        dictionary::{DictionaryBump, DictionaryEntry, BuiltinEntry, AsyncBuiltinEntry},
+        dictionary::{DictionaryBump, DictionaryEntry, BuiltinEntry},
         leakbox::LeakBox,
         Word,
     };
+
+    #[cfg(feature = "async")]
+    use super::AsyncBuiltinEntry;
 
     use super::EntryHeader;
 
@@ -188,6 +194,7 @@ pub mod test {
     fn sizes() {
         assert_eq!(size_of::<EntryHeader<()>>(), 3 * size_of::<usize>());
         assert_eq!(size_of::<BuiltinEntry<()>>(), 4 * size_of::<usize>());
+        #[cfg(feature = "async")]
         assert_eq!(size_of::<AsyncBuiltinEntry<()>>(), 3 * size_of::<usize>());
     }
 

@@ -1,6 +1,7 @@
 // For now...
 #![allow(clippy::missing_safety_doc)]
 #![cfg_attr(not(any(test, feature = "use-std")), no_std)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 pub mod dictionary;
 pub mod fastr;
@@ -15,7 +16,10 @@ pub mod leakbox;
 
 use core::ptr::NonNull;
 
-use dictionary::{BuiltinEntry, EntryHeader, EntryKind, AsyncBuiltinEntry};
+use dictionary::{BuiltinEntry, EntryHeader, EntryKind};
+
+#[cfg(feature = "async")]
+use dictionary::AsyncBuiltinEntry;
 
 pub use crate::vm::Forth;
 use crate::{
@@ -129,6 +133,7 @@ impl<T: 'static> CallContext<T> {
         match eh.kind {
             EntryKind::StaticBuiltin => Err(Error::BuiltinHasNoNextValue),
             EntryKind::RuntimeBuiltin => Err(Error::BuiltinHasNoNextValue),
+            #[cfg(feature = "async")]
             EntryKind::AsyncBuiltin => Err(Error::BuiltinHasNoNextValue),
             EntryKind::Dictionary => unsafe {
                 let de = self.eh.cast::<DictionaryEntry<T>>();
@@ -151,6 +156,7 @@ impl<T: 'static> CallContext<T> {
         match eh.kind {
             EntryKind::StaticBuiltin => Err(Error::BuiltinHasNoNextValue),
             EntryKind::RuntimeBuiltin => Err(Error::BuiltinHasNoNextValue),
+            #[cfg(feature = "async")]
             EntryKind::AsyncBuiltin => Err(Error::BuiltinHasNoNextValue),
             EntryKind::Dictionary => unsafe {
                 let de = self.eh.cast::<DictionaryEntry<T>>();
@@ -178,6 +184,7 @@ impl<T: 'static> CallContext<T> {
         match eh.kind {
             EntryKind::StaticBuiltin => None,
             EntryKind::RuntimeBuiltin => None,
+            #[cfg(feature = "async")]
             EntryKind::AsyncBuiltin => None,
             EntryKind::Dictionary => unsafe {
                 let de = self.eh.cast::<DictionaryEntry<T>>();
@@ -207,6 +214,7 @@ pub enum Lookup<T: 'static> {
     Builtin {
         bi: NonNull<BuiltinEntry<T>>,
     },
+    #[cfg(feature = "async")]
     Async {
         bi: NonNull<AsyncBuiltinEntry<T>>,
     },
@@ -327,7 +335,7 @@ pub mod test {
             }
         }
 
-        let mut lbforth = LBForth::from_params(
+        let mut lbforth = LBForth::from_params_async(
             LBForthParams::default(),
             TestContext::default(),
             Forth::<TestContext>::FULL_BUILTINS,
@@ -373,7 +381,6 @@ pub mod test {
             LBForthParams::default(),
             TestContext::default(),
             Forth::<TestContext>::FULL_BUILTINS,
-            &[],
         );
         let forth = &mut lbforth.forth;
         assert_eq!(0, forth.dict_alloc.used());
