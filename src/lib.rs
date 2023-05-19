@@ -22,6 +22,8 @@ use dictionary::{BuiltinEntry, EntryHeader, EntryKind};
 use dictionary::AsyncBuiltinEntry;
 
 pub use crate::vm::Forth;
+#[cfg(feature = "async")]
+pub use crate::vm::AsyncForth;
 use crate::{
     dictionary::{BumpError, DictionaryEntry},
     output::OutputError,
@@ -77,7 +79,6 @@ pub enum Error {
     // Not *really* an error - but signals that a function should be called
     // again. At the moment, only used for internal interpreter functions.
     PendingCallAgain,
-    NoAsyncInNonAsyncSteppa,
 }
 
 impl From<StackError> for Error {
@@ -274,7 +275,16 @@ pub mod test {
 
     #[test]
     fn forth() {
-        test_forth(|forth| forth.process_line())
+        let mut lbforth = LBForth::from_params(
+            LBForthParams::default(),
+            TestContext::default(),
+            Forth::<TestContext>::FULL_BUILTINS,
+        );
+
+        test_forth(&mut lbforth.forth,|forth| forth.process_line(), |forth| forth);
+
+        let context = lbforth.forth.release();
+        assert_eq!(&context.contents, &[6, 5, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
 
     struct CountingFut<'forth> {
@@ -309,8 +319,7 @@ pub mod test {
     #[cfg(feature = "async")]
     #[test]
     fn async_forth() {
-        use crate::{dictionary::{DispatchAsync, AsyncBuiltinEntry}, fastr::FaStr};
-        use crate::async_builtin;
+        use crate::{dictionary::{DispatchAsync, AsyncBuiltinEntry}, fastr::FaStr, async_builtin, leakbox::AsyncLBForth};
 
         const ASYNC_BIS: &[AsyncBuiltinEntry<TestContext>] = &[
             async_builtin!("counter"),
@@ -335,11 +344,12 @@ pub mod test {
             }
         }
 
-        let mut lbforth = LBForth::from_params_async(
+        let mut lbforth = AsyncLBForth::from_params(
             LBForthParams::default(),
             TestContext::default(),
             Forth::<TestContext>::FULL_BUILTINS,
             ASYNC_BIS,
+            TestAsyncDispatcher,
         );
         let forth = &mut lbforth.forth;
 
@@ -349,18 +359,18 @@ pub mod test {
 
         for (line, out) in lines {
             println!("{}", line);
-            forth.input.fill(line).unwrap();
-            futures::executor::block_on(forth.process_line_async(&TestAsyncDispatcher)).unwrap();
-            print!(" => {}", forth.output.as_str());
-            assert_eq!(forth.output.as_str(), *out);
-            forth.output.clear();
+            forth.input_mut().fill(line).unwrap();
+            futures::executor::block_on(forth.process_line()).unwrap();
+            print!(" => {}", forth.output().as_str());
+            assert_eq!(forth.output().as_str(), *out);
+            forth.output_mut().clear();
         }
     }
 
     #[cfg(feature = "async")]
     #[test]
     fn async_forth_not() {
-        use crate::{dictionary::DispatchAsync, fastr::FaStr};
+        use crate::{dictionary::{DispatchAsync}, fastr::FaStr, leakbox::AsyncLBForth, AsyncForth};
 
         struct TestAsyncDispatcher;
         impl<'forth> DispatchAsync<'forth, TestContext> for TestAsyncDispatcher {
@@ -370,20 +380,20 @@ pub mod test {
                 _id: &FaStr,
                 _forth: &'forth mut Forth<TestContext>,
             ) -> Self::Future {
-               todo!("eliza: actually test this...")
+                 unreachable!("no async builtins should be called in this test")
             }
         }
-        test_forth(|forth| futures::executor::block_on(forth.process_line_async(&TestAsyncDispatcher)))
-    }
 
-    fn test_forth(mut process_line: impl FnMut(&mut Forth<TestContext>) -> Result<(), Error>) {
-        let mut lbforth = LBForth::from_params(
+        let mut lbforth = AsyncLBForth::from_params(
             LBForthParams::default(),
             TestContext::default(),
             Forth::<TestContext>::FULL_BUILTINS,
-        );
-        let forth = &mut lbforth.forth;
-        assert_eq!(0, forth.dict_alloc.used());
+        &[], TestAsyncDispatcher);
+        test_forth(&mut lbforth.forth, |forth| futures::executor::block_on(forth.process_line()), AsyncForth::vm_mut)
+    }
+
+    fn test_forth<T>(forth: &mut T, process_line: impl Fn(&mut T) -> Result<(), Error>, get_forth: impl Fn(&mut T) -> &mut Forth<TestContext>) {
+        assert_eq!(0, get_forth(forth).dict_alloc.used());
         let lines = &[
             ("2 3 + .", "5 ok.\n"),
             (": yay 2 3 + . ;", "ok.\n"),
@@ -437,35 +447,35 @@ pub mod test {
 
         for (line, out) in lines {
             println!("{}", line);
-            forth.input.fill(line).unwrap();
+            get_forth(forth).input.fill(line).unwrap();
             process_line(forth).unwrap();
-            print!(" => {}", forth.output.as_str());
-            assert_eq!(forth.output.as_str(), *out);
-            forth.output.clear();
+            print!(" => {}", get_forth(forth).output.as_str());
+            assert_eq!(get_forth(forth).output.as_str(), *out);
+            get_forth(forth).output.clear();
         }
 
-        forth.input.fill(": derp boop yay").unwrap();
+        get_forth(forth).input.fill(": derp boop yay").unwrap();
         assert!(process_line(forth).is_err());
         // TODO: Should handle this automatically...
-        forth.return_stack.clear();
+        get_forth(forth).return_stack.clear();
 
-        forth.input.fill(": doot yay yaay").unwrap();
+        get_forth(forth).input.fill(": doot yay yaay").unwrap();
         assert!(process_line(forth).is_err());
         // TODO: Should handle this automatically...
-        forth.return_stack.clear();
+        get_forth(forth).return_stack.clear();
 
-        forth.output.clear();
-        forth.input.fill("boop yay").unwrap();
+        get_forth(forth).output.clear();
+        get_forth(forth).input.fill("boop yay").unwrap();
         process_line(forth).unwrap();
-        assert_eq!(forth.output.as_str(), "5 5 5 ok.\n");
+        assert_eq!(get_forth(forth).output.as_str(), "5 5 5 ok.\n");
 
         let mut any_stacks = false;
 
-        while let Some(dsw) = forth.data_stack.pop() {
+        while let Some(dsw) = get_forth(forth).data_stack.pop() {
             println!("DSW: {:?}", dsw);
             any_stacks = true;
         }
-        while let Some(rsw) = forth.return_stack.pop() {
+        while let Some(rsw) = get_forth(forth).return_stack.pop() {
             println!("RSW: {:?}", rsw);
             any_stacks = true;
         }
@@ -488,7 +498,7 @@ pub mod test {
             forth.host_ctxt.contents.push(unsafe { val.data });
             Ok(())
         }
-        forth.add_builtin("squirrel", squirrel).unwrap();
+        get_forth(forth).add_builtin("squirrel", squirrel).unwrap();
 
         let lines = &[
             ("5 6 squirrel squirrel", "ok.\n"),
@@ -496,17 +506,14 @@ pub mod test {
             ("sqloop", "ok.\n"),
         ];
 
-        forth.output.clear();
+        get_forth(forth).output.clear();
         for (line, out) in lines {
             println!("{}", line);
-            forth.input.fill(line).unwrap();
+            get_forth(forth).input.fill(line).unwrap();
             process_line(forth).unwrap();
-            print!(" => {}", forth.output.as_str());
-            assert_eq!(forth.output.as_str(), *out);
-            forth.output.clear();
+            print!(" => {}", get_forth(forth).output.as_str());
+            assert_eq!(get_forth(forth).output.as_str(), *out);
+            get_forth(forth).output.clear();
         }
-
-        let context = lbforth.forth.release();
-        assert_eq!(&context.contents, &[6, 5, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
 }

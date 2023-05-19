@@ -4,7 +4,6 @@ use core::{
     ops::{Deref, Neg},
     ptr::NonNull,
     str::FromStr, marker::PhantomData,
-    // task::{Context, Poll},
 };
 
 use crate::{
@@ -23,6 +22,12 @@ use crate::{
 use crate::dictionary::{AsyncBuiltinEntry, DispatchAsync};
 
 pub mod builtins;
+
+#[cfg(feature = "async")]
+mod async_vm;
+
+#[cfg(feature = "async")]
+pub use self::async_vm::AsyncForth;
 
 /// Forth is the "context" of the VM/interpreter.
 ///
@@ -91,7 +96,7 @@ impl<T> Forth<T> {
     }
 
     #[cfg(feature = "async")]
-    pub unsafe fn new_async(
+     unsafe fn new_async(
         dstack_buf: (*mut Word, usize),
         rstack_buf: (*mut Word, usize),
         cstack_buf: (*mut CallContext<T>, usize),
@@ -261,32 +266,6 @@ impl<T> Forth<T> {
         }
     }
 
-    #[cfg(feature = "async")]
-    pub async fn process_line_async(&mut self, dispatcher: &impl for<'forth> DispatchAsync<'forth, T>) -> Result<(), Error> {
-        let res = async {
-            loop {
-                match self.start_processing_line()? {
-                    ProcessAction::Done => {
-                        self.output.push_str("ok.\n")?;
-                        break Ok(());
-                    },
-                    ProcessAction::Continue => {},
-                    ProcessAction::Execute =>
-                        while self.async_pig(dispatcher).await? != Step::Done {},
-                }
-            }
-        }.await;
-        match res {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                self.data_stack.clear();
-                self.return_stack.clear();
-                self.call_stack.clear();
-                Err(e)
-            }
-        }
-    }
-
     /// Returns `true` if we must call `steppa_pig` until it returns `Ready`,
     /// false if not.
     fn start_processing_line(&mut self) -> Result<ProcessAction, Error> {
@@ -377,7 +356,11 @@ impl<T> Forth<T> {
 
             #[cfg(feature = "async")]
             EntryKind::AsyncBuiltin => {
-                return Err(Error::NoAsyncInNonAsyncSteppa);
+                unreachable!(
+                    "only an AsyncForth VM should have async builtins, and an \
+                    AsyncForth VM should never perform a non-async execution \
+                    step! this is a bug."
+                )
             },
         }};
 
@@ -393,39 +376,6 @@ impl<T> Forth<T> {
 
         Ok(Step::NotDone)
     }
-
-    // Single step execution (async version).
-    #[cfg(feature = "async")]
-    async fn async_pig(&mut self, dispatcher: &impl for<'forth> DispatchAsync<'forth, T>) -> Result<Step, Error> {
-        let top = match self.call_stack.try_peek() {
-            Ok(t) => t,
-            Err(StackError::StackEmpty) => return Ok(Step::Done),
-            Err(e) => return Err(Error::Stack(e)),
-        };
-
-        let kind = unsafe { top.eh.as_ref().kind };
-        let res = unsafe { match kind {
-            EntryKind::StaticBuiltin => (top.eh.cast::<BuiltinEntry<T>>().as_ref().func)(self),
-            EntryKind::RuntimeBuiltin => (top.eh.cast::<BuiltinEntry<T>>().as_ref().func)(self),
-            EntryKind::Dictionary => (top.eh.cast::<DictionaryEntry<T>>().as_ref().func)(self),
-            EntryKind::AsyncBuiltin => {
-                dispatcher.dispatch_async(&top.eh.as_ref().name, self).await
-            },
-        }};
-
-        match res {
-            Ok(_) => {
-                let _ = self.call_stack.pop();
-            }
-            Err(Error::PendingCallAgain) => {
-                // ok, just don't pop
-            }
-            Err(e) => return Err(e),
-        }
-
-        Ok(Step::NotDone)
-    }
-
 
     /// Interpret is the run-time target of the `:` (colon) word.
     pub fn interpret(&mut self) -> Result<(), Error> {

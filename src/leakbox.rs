@@ -9,7 +9,7 @@ use crate::{
 };
 
 #[cfg(feature = "async")]
-use crate::dictionary::AsyncBuiltinEntry;
+use crate::{AsyncForth, dictionary::{AsyncBuiltinEntry, DispatchAsync}};
 
 // Helper type that will un-leak the buffer once it is dropped.
 pub struct LeakBox<T> {
@@ -81,6 +81,17 @@ pub struct LBForth<T: 'static> {
     _dict_buf: LeakBox<u8>,
 }
 
+#[cfg(feature = "async")]
+pub struct AsyncLBForth<T: 'static, D> {
+    pub forth: AsyncForth<T, D>,
+    _payload_dstack: LeakBox<Word>,
+    _payload_rstack: LeakBox<Word>,
+    _payload_cstack: LeakBox<CallContext<T>>,
+    _input_buf: LeakBox<u8>,
+    _output_buf: LeakBox<u8>,
+    _dict_buf: LeakBox<u8>,
+}
+
 impl<T: 'static> LBForth<T> {
     pub fn from_params(
         params: LBForthParams,
@@ -120,13 +131,19 @@ impl<T: 'static> LBForth<T> {
             _dict_buf,
         }
     }
+}
 
-    #[cfg(feature = "async")]
-    pub fn from_params_async(
+#[cfg(feature = "async")]
+impl<T, D> AsyncLBForth<T, D>
+where
+    T: 'static,
+    D: for<'forth> DispatchAsync<'forth, T>, {
+    pub fn from_params(
         params: LBForthParams,
         host_ctxt: T,
-        builtins: &'static [BuiltinEntry<T>],
-        async_builtins: &'static [AsyncBuiltinEntry<T>]
+        sync_builtins: &'static [BuiltinEntry<T>],
+        async_builtins: &'static [AsyncBuiltinEntry<T>],
+        dispatcher: D
     ) -> Self {
         let _payload_dstack: LeakBox<Word> = LeakBox::new(params.data_stack_elems);
         let _payload_rstack: LeakBox<Word> = LeakBox::new(params.return_stack_elems);
@@ -138,7 +155,7 @@ impl<T: 'static> LBForth<T> {
         let input = WordStrBuf::new(_input_buf.ptr(), _input_buf.len());
         let output = OutputBuf::new(_output_buf.ptr(), _output_buf.len());
         let forth = unsafe {
-            Forth::<T>::new_async(
+            AsyncForth::<T, D>::new(
                 (_payload_dstack.ptr(), _payload_dstack.len()),
                 (_payload_rstack.ptr(), _payload_rstack.len()),
                 (_payload_cstack.ptr(), _payload_cstack.len()),
@@ -146,8 +163,9 @@ impl<T: 'static> LBForth<T> {
                 input,
                 output,
                 host_ctxt,
-                builtins,
+                sync_builtins,
                 async_builtins,
+                dispatcher,
             )
             .unwrap()
         };
