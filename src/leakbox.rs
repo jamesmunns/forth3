@@ -9,7 +9,7 @@ use crate::{
 };
 
 #[cfg(feature = "async")]
-use crate::{AsyncForth, dictionary::{AsyncBuiltinEntry, DispatchAsync}};
+use crate::{AsyncForth, dictionary::{DispatchAsync}};
 
 // Helper type that will un-leak the buffer once it is dropped.
 pub struct LeakBox<T> {
@@ -137,12 +137,12 @@ impl<T: 'static> LBForth<T> {
 impl<T, D> AsyncLBForth<T, D>
 where
     T: 'static,
-    D: for<'forth> DispatchAsync<'forth, T>, {
+    D: for<'forth> DispatchAsync<'forth, T>,
+{
     pub fn from_params(
         params: LBForthParams,
         host_ctxt: T,
         sync_builtins: &'static [BuiltinEntry<T>],
-        async_builtins: &'static [AsyncBuiltinEntry<T>],
         dispatcher: D
     ) -> Self {
         let _payload_dstack: LeakBox<Word> = LeakBox::new(params.data_stack_elems);
@@ -164,7 +164,6 @@ where
                 output,
                 host_ctxt,
                 sync_builtins,
-                async_builtins,
                 dispatcher,
             )
             .unwrap()

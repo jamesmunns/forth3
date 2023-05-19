@@ -19,10 +19,9 @@ where
         output: OutputBuf,
         host_ctxt: T,
         sync_builtins: &'static [BuiltinEntry<T>],
-        async_builtins: &'static [AsyncBuiltinEntry<T>],
         dispatcher: D,
     ) -> Result<Self, Error> {
-        let vm = Forth::new_async(dstack_buf, rstack_buf, cstack_buf, dict_buf, input, output, host_ctxt, sync_builtins, async_builtins)?;
+        let vm = Forth::new_async(dstack_buf, rstack_buf, cstack_buf, dict_buf, input, output, host_ctxt, sync_builtins, D::ASYNC_BUILTINS)?;
         Ok(Self { vm, dispatcher })
     }
 

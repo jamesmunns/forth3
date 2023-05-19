@@ -62,8 +62,11 @@ pub struct DictionaryBump {
 }
 
 #[cfg(feature = "async")]
-pub trait DispatchAsync<'forth, T> {
+pub trait DispatchAsync<'forth, T: 'static> {
     type Future: core::future::Future<Output = Result<(), crate::Error>>;
+
+    const ASYNC_BUILTINS: &'static [AsyncBuiltinEntry<T>];
+
     fn dispatch_async(&self, id: &FaStr, forth: &'forth mut crate::Forth<T>) -> Self::Future;
 }
 

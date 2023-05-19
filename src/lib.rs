@@ -321,13 +321,14 @@ pub mod test {
     fn async_forth() {
         use crate::{dictionary::{DispatchAsync, AsyncBuiltinEntry}, fastr::FaStr, async_builtin, leakbox::AsyncLBForth};
 
-        const ASYNC_BIS: &[AsyncBuiltinEntry<TestContext>] = &[
-            async_builtin!("counter"),
-        ];
-
         struct TestAsyncDispatcher;
         impl<'forth> DispatchAsync<'forth, TestContext> for TestAsyncDispatcher {
             type Future = CountingFut<'forth>;
+
+            const ASYNC_BUILTINS: &'static [AsyncBuiltinEntry<TestContext>] = &[
+                async_builtin!("counter"),
+            ];
+
             fn dispatch_async(
                 &self,
                 id: &FaStr,
@@ -348,7 +349,6 @@ pub mod test {
             LBForthParams::default(),
             TestContext::default(),
             Forth::<TestContext>::FULL_BUILTINS,
-            ASYNC_BIS,
             TestAsyncDispatcher,
         );
         let forth = &mut lbforth.forth;
@@ -370,11 +370,12 @@ pub mod test {
     #[cfg(feature = "async")]
     #[test]
     fn async_forth_not() {
-        use crate::{dictionary::{DispatchAsync}, fastr::FaStr, leakbox::AsyncLBForth, AsyncForth};
+        use crate::{dictionary::{DispatchAsync, AsyncBuiltinEntry}, fastr::FaStr, leakbox::AsyncLBForth, AsyncForth};
 
         struct TestAsyncDispatcher;
         impl<'forth> DispatchAsync<'forth, TestContext> for TestAsyncDispatcher {
             type Future = futures::future::Ready<Result<(), Error>>;
+            const ASYNC_BUILTINS: &'static [AsyncBuiltinEntry<TestContext>] = &[];
             fn dispatch_async(
                 &self,
                 _id: &FaStr,
@@ -388,7 +389,7 @@ pub mod test {
             LBForthParams::default(),
             TestContext::default(),
             Forth::<TestContext>::FULL_BUILTINS,
-        &[], TestAsyncDispatcher);
+            TestAsyncDispatcher);
         test_forth(&mut lbforth.forth, |forth| futures::executor::block_on(forth.process_line()), AsyncForth::vm_mut)
     }
 
