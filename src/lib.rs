@@ -269,12 +269,13 @@ pub mod test {
         test_forth(|forth| forth.process_line())
     }
 
-    struct CountingFut {
+    struct CountingFut<'forth> {
         target: usize,
         ctr: usize,
+        forth: &'forth mut Forth<TestContext>,
     }
 
-    impl Future for CountingFut {
+    impl<'forth> Future for CountingFut<'forth> {
         type Output = Result<(), Error>;
 
         fn poll(mut self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> core::task::Poll<Self::Output> {
@@ -286,6 +287,8 @@ pub mod test {
                 },
                 Ordering::Equal => {
                     self.ctr += 1;
+                    let word = Word::data(self.ctr as i32);
+                    self.forth.data_stack.push(word)?;
                     Poll::Ready(Ok(()))
                 },
                 Ordering::Greater => {
@@ -306,21 +309,20 @@ pub mod test {
         ];
 
         struct TestAsyncDispatcher;
-        impl DispatchAsync<TestContext> for TestAsyncDispatcher {
-            type Future = futures::future::Ready<Result<(), Error>>;
+        impl<'forth> DispatchAsync<'forth, TestContext> for TestAsyncDispatcher {
+            type Future = CountingFut<'forth>;
             fn dispatch_async(
                 &self,
                 id: &FaStr,
-                forth: &mut Forth<TestContext>,
+                forth: &'forth mut Forth<TestContext>,
             ) -> Self::Future {
                 match id.as_str() {
                     "counter" => {
                         // Get value from top of stack
                         let val: usize = forth.data_stack.pop().unwrap().try_into().unwrap();
-                        let fut = CountingFut { ctr: 0, target: val };
-                        todo!("Eliza how do I do this?")
+                        CountingFut { ctr: 0, target: val, forth }
                     }
-                    _ => panic!("Unknown!")
+                    id => panic!("Unknown async builtin {id}")
                 }
             }
         }
@@ -352,15 +354,13 @@ pub mod test {
     fn async_forth_not() {
         use crate::{dictionary::DispatchAsync, fastr::FaStr};
 
-
-
         struct TestAsyncDispatcher;
-        impl DispatchAsync<TestContext> for TestAsyncDispatcher {
+        impl<'forth> DispatchAsync<'forth, TestContext> for TestAsyncDispatcher {
             type Future = futures::future::Ready<Result<(), Error>>;
             fn dispatch_async(
                 &self,
                 _id: &FaStr,
-                _forth: &mut Forth<TestContext>,
+                _forth: &'forth mut Forth<TestContext>,
             ) -> Self::Future {
                todo!("eliza: actually test this...")
             }

@@ -59,9 +59,9 @@ pub struct DictionaryBump {
     pub(crate) end: *mut u8,
 }
 
-pub trait DispatchAsync<T> {
+pub trait DispatchAsync<'forth, T> {
     type Future: core::future::Future<Output = Result<(), crate::Error>>;
-    fn dispatch_async(&self, id: &FaStr, forth: &mut crate::Forth<T>) -> Self::Future;
+    fn dispatch_async(&self, id: &FaStr, forth: &'forth mut crate::Forth<T>) -> Self::Future;
 }
 
 impl<T: 'static> DictionaryEntry<T> {

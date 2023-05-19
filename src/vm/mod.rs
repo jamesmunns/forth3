@@ -221,7 +221,7 @@ impl<T> Forth<T> {
     }
 
     #[cfg(feature = "async")]
-    pub async fn process_line_async(&mut self, dispatcher: &impl DispatchAsync<T>) -> Result<(), Error> {
+    pub async fn process_line_async(&mut self, dispatcher: &impl for<'forth> DispatchAsync<'forth, T>) -> Result<(), Error> {
         let res = async {
             loop {
                 match self.start_processing_line()? {
@@ -352,7 +352,7 @@ impl<T> Forth<T> {
 
     // Single step execution (async version).
     #[cfg(feature = "async")]
-    async fn async_pig(&mut self, dispatcher: &impl DispatchAsync<T>) -> Result<Step, Error> {
+    async fn async_pig(&mut self, dispatcher: &impl for<'forth> DispatchAsync<'forth, T>) -> Result<Step, Error> {
         let top = match self.call_stack.try_peek() {
             Ok(t) => t,
             Err(StackError::StackEmpty) => return Ok(Step::Done),
