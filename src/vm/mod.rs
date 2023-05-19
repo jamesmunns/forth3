@@ -19,7 +19,7 @@ use crate::{
 };
 
 #[cfg(feature = "async")]
-use crate::dictionary::{AsyncBuiltinEntry, DispatchAsync};
+use crate::dictionary::{AsyncBuiltinEntry, AsyncBuiltins};
 
 pub mod builtins;
 

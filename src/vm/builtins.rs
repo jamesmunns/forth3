@@ -29,6 +29,11 @@ macro_rules! builtin {
     };
 }
 
+/// Constructs an [`AsyncBuiltinEntry`](crate::dictionary::AsyncBuiltinEntry)
+/// for an asynchronous builtin word.
+///
+/// See the [documentation for `AsyncForth`](crate::AsyncForth) for details on
+/// using asynchronous builtin words.
 #[macro_export]
 macro_rules! async_builtin {
     ($name:literal) => {

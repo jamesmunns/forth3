@@ -319,13 +319,13 @@ pub mod test {
     #[cfg(feature = "async")]
     #[test]
     fn async_forth() {
-        use crate::{dictionary::{DispatchAsync, AsyncBuiltinEntry}, fastr::FaStr, async_builtin, leakbox::AsyncLBForth};
+        use crate::{dictionary::{AsyncBuiltins, AsyncBuiltinEntry}, fastr::FaStr, async_builtin, leakbox::AsyncLBForth};
 
         struct TestAsyncDispatcher;
-        impl<'forth> DispatchAsync<'forth, TestContext> for TestAsyncDispatcher {
+        impl<'forth> AsyncBuiltins<'forth, TestContext> for TestAsyncDispatcher {
             type Future = CountingFut<'forth>;
 
-            const ASYNC_BUILTINS: &'static [AsyncBuiltinEntry<TestContext>] = &[
+            const BUILTINS: &'static [AsyncBuiltinEntry<TestContext>] = &[
                 async_builtin!("counter"),
             ];
 
@@ -370,12 +370,12 @@ pub mod test {
     #[cfg(feature = "async")]
     #[test]
     fn async_forth_not() {
-        use crate::{dictionary::{DispatchAsync, AsyncBuiltinEntry}, fastr::FaStr, leakbox::AsyncLBForth, AsyncForth};
+        use crate::{dictionary::{AsyncBuiltins, AsyncBuiltinEntry}, fastr::FaStr, leakbox::AsyncLBForth, AsyncForth};
 
         struct TestAsyncDispatcher;
-        impl<'forth> DispatchAsync<'forth, TestContext> for TestAsyncDispatcher {
+        impl<'forth> AsyncBuiltins<'forth, TestContext> for TestAsyncDispatcher {
             type Future = futures::future::Ready<Result<(), Error>>;
-            const ASYNC_BUILTINS: &'static [AsyncBuiltinEntry<TestContext>] = &[];
+            const BUILTINS: &'static [AsyncBuiltinEntry<TestContext>] = &[];
             fn dispatch_async(
                 &self,
                 _id: &FaStr,

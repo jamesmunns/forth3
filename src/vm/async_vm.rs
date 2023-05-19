@@ -1,14 +1,42 @@
 use super::*;
 
-pub struct AsyncForth<T: 'static, D> {
+/// A Forth VM in which some builtin words are implemented by `async fn`s (or
+/// [`Future`]s).
+///
+/// # Asynchronous Forth VMs
+///
+/// Asynchronous builtins are asynchronous relative to the *host* context (i.e.,
+/// the Rust program in which the Forth VM is embedded), rather than the Forth
+/// program that executes within the VM. This means that, unlike a
+/// synchronous [`Forth`] VM, the [`AsyncForth::process_line`] method is an
+/// [`async fn`]. When the Forth program executes a builtin word that is
+/// implemented by an [`async fn`] on the host, the [`AsyncForth::process_line`]
+/// will [`.await`] the [`Future`] that implements the builtin word, and will
+/// yield if the `Future` is not ready. This allows multiple [`AsyncForth`] VMs
+/// to run asynchronously in an async context on the host, yielding when the
+/// Forth programs in those VMs sleep or perform asynchronous I/O operations.
+///
+/// # Providing Async Builtins
+///
+/// Unlike synchronous builtins, which are provided to the VM as a slice of
+/// [`BuiltinEntry`]s, asynchronous builtins require an implementation of the
+/// [`AsyncBuiltins`] trait, which provides both a slice of
+/// [`AsyncBuiltinEntry`]s and a [method to dispatch builtin names to
+/// `Future`s](AsyncBuiltins::dispatch_async). See the documentation for the
+/// [`AsyncBuiltins`] trait for details on providing async builtins.
+///
+/// [`Future`]: core::future::Future
+/// [`async fn`]: https://doc.rust-lang.org/stable/std/keyword.async.html
+/// [`.await`]: https://doc.rust-lang.org/stable/std/keyword.await.html
+pub struct AsyncForth<T: 'static, A> {
     vm: Forth<T>,
-    dispatcher: D,
+    builtins: A,
 }
 
-impl<T, D> AsyncForth<T, D>
+impl<T, A> AsyncForth<T, A>
 where
     T: 'static,
-    D: for<'forth> DispatchAsync<'forth, T>,
+    A: for<'forth> AsyncBuiltins<'forth, T>,
 {
     pub unsafe fn new(
         dstack_buf: (*mut Word, usize),
@@ -19,10 +47,10 @@ where
         output: OutputBuf,
         host_ctxt: T,
         sync_builtins: &'static [BuiltinEntry<T>],
-        dispatcher: D,
+        async_builtins: A,
     ) -> Result<Self, Error> {
-        let vm = Forth::new_async(dstack_buf, rstack_buf, cstack_buf, dict_buf, input, output, host_ctxt, sync_builtins, D::ASYNC_BUILTINS)?;
-        Ok(Self { vm, dispatcher })
+        let vm = Forth::new_async(dstack_buf, rstack_buf, cstack_buf, dict_buf, input, output, host_ctxt, sync_builtins, A::BUILTINS)?;
+        Ok(Self { vm, builtins: async_builtins })
     }
 
     pub fn output(&self) -> &OutputBuf {
@@ -81,7 +109,7 @@ where
 
     // Single step execution (async version).
     async fn async_pig(&mut self) -> Result<Step, Error> {
-        let Self { ref mut vm, ref dispatcher } = self;
+        let Self { ref mut vm, ref builtins } = self;
 
         let top = match vm.call_stack.try_peek() {
             Ok(t) => t,
@@ -95,7 +123,7 @@ where
             EntryKind::RuntimeBuiltin => (top.eh.cast::<BuiltinEntry<T>>().as_ref().func)(vm),
             EntryKind::Dictionary => (top.eh.cast::<DictionaryEntry<T>>().as_ref().func)(vm),
             EntryKind::AsyncBuiltin => {
-                dispatcher.dispatch_async(&top.eh.as_ref().name, vm).await
+                builtins.dispatch_async(&top.eh.as_ref().name, vm).await
             },
         }};
 
