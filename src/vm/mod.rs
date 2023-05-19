@@ -32,7 +32,7 @@ pub mod builtins;
 /// reasons.
 pub struct Forth<T: 'static> {
     mode: Mode,
-    pub(crate) data_stack: Stack<Word>,
+    pub data_stack: Stack<Word>,
     pub(crate) return_stack: Stack<Word>,
     pub(crate) call_stack: Stack<CallContext<T>>,
     pub(crate) dict_alloc: DictionaryBump,
@@ -281,6 +281,8 @@ impl<T> Forth<T> {
                     idx: 0,
                     len: 0,
                 })?;
+
+                return Ok(ProcessAction::Execute);
             },
             Lookup::Literal { val } => {
                 self.data_stack.push(Word::data(val))?;

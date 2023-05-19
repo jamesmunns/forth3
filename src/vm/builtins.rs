@@ -14,6 +14,7 @@ pub mod floats;
 // NOTE: This macro exists because we can't have const constructors that include
 // "mut" items, which unfortunately covers things like `fn(&mut T)`. Use a macro
 // until this is resolved.
+#[macro_export]
 macro_rules! builtin {
     ($name:literal, $func:expr) => {
         BuiltinEntry {
@@ -28,6 +29,21 @@ macro_rules! builtin {
     };
 }
 
+#[macro_export]
+macro_rules! async_builtin {
+    ($name:literal) => {
+        $crate::dictionary::AsyncBuiltinEntry {
+            hdr: $crate::dictionary::EntryHeader {
+                name: $crate::fastr::comptime_fastr($name),
+                kind: $crate::dictionary::EntryKind::AsyncBuiltin,
+                len: 0,
+                _pd: core::marker::PhantomData,
+            },
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! builtin_if_feature {
     ($feature:literal, $name:literal, $func:expr) => {
         #[cfg(feature = $feature)]

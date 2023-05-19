@@ -170,10 +170,6 @@ impl<T: 'static> CallContext<T> {
         Ok(())
     }
 
-    // fn cfa_arr(&self) -> &[Word] {
-    //     unsafe { cfa_to_slice(self.cfa) }
-    // }
-
     fn get_word_at_cur_idx(&self) -> Option<&Word> {
         if self.idx >= self.len {
             return None;
@@ -245,6 +241,8 @@ impl<T, OE> ReplaceErr for Result<T, OE> {
 
 #[cfg(test)]
 pub mod test {
+    use core::{future::Future, cmp::Ordering, task::Poll};
+
     use crate::{
         dictionary::DictionaryEntry,
         leakbox::{LBForth, LBForthParams},
@@ -271,10 +269,90 @@ pub mod test {
         test_forth(|forth| forth.process_line())
     }
 
+    struct CountingFut {
+        target: usize,
+        ctr: usize,
+    }
+
+    impl Future for CountingFut {
+        type Output = Result<(), Error>;
+
+        fn poll(mut self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> core::task::Poll<Self::Output> {
+            match self.ctr.cmp(&self.target) {
+                Ordering::Less => {
+                    self.ctr += 1;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                },
+                Ordering::Equal => {
+                    self.ctr += 1;
+                    Poll::Ready(Ok(()))
+                },
+                Ordering::Greater => {
+                    Poll::Ready(Err(Error::InternalError))
+                },
+            }
+        }
+    }
+
     #[cfg(feature = "async")]
     #[test]
     fn async_forth() {
+        use crate::{dictionary::{DispatchAsync, AsyncBuiltinEntry}, fastr::FaStr};
+        use crate::async_builtin;
+
+        const ASYNC_BIS: &[AsyncBuiltinEntry<TestContext>] = &[
+            async_builtin!("counter"),
+        ];
+
+        struct TestAsyncDispatcher;
+        impl DispatchAsync<TestContext> for TestAsyncDispatcher {
+            type Future = futures::future::Ready<Result<(), Error>>;
+            fn dispatch_async(
+                &self,
+                id: &FaStr,
+                forth: &mut Forth<TestContext>,
+            ) -> Self::Future {
+                match id.as_str() {
+                    "counter" => {
+                        // Get value from top of stack
+                        let val: usize = forth.data_stack.pop().unwrap().try_into().unwrap();
+                        let fut = CountingFut { ctr: 0, target: val };
+                        todo!("Eliza how do I do this?")
+                    }
+                    _ => panic!("Unknown!")
+                }
+            }
+        }
+
+        let mut lbforth = LBForth::from_params(
+            LBForthParams::default(),
+            TestContext::default(),
+            Forth::<TestContext>::FULL_BUILTINS,
+            ASYNC_BIS,
+        );
+        let forth = &mut lbforth.forth;
+
+        let lines = &[
+            ("5 counter", "ok.\n"),
+        ];
+
+        for (line, out) in lines {
+            println!("{}", line);
+            forth.input.fill(line).unwrap();
+            futures::executor::block_on(forth.process_line_async(&TestAsyncDispatcher)).unwrap();
+            print!(" => {}", forth.output.as_str());
+            assert_eq!(forth.output.as_str(), *out);
+            forth.output.clear();
+        }
+    }
+
+    #[cfg(feature = "async")]
+    #[test]
+    fn async_forth_not() {
         use crate::{dictionary::DispatchAsync, fastr::FaStr};
+
+
 
         struct TestAsyncDispatcher;
         impl DispatchAsync<TestContext> for TestAsyncDispatcher {
