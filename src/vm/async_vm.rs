@@ -25,6 +25,21 @@ use super::*;
 /// `Future`s](AsyncBuiltins::dispatch_async). See the documentation for the
 /// [`AsyncBuiltins`] trait for details on providing async builtins.
 ///
+/// # Synchronous Builtins
+///
+/// An `AsyncForth` VM may also have synchronous builtin words. These behave
+/// identically to the synchronous builtins in a non-async [`Forth`] VM.
+/// Synchronous builtins should be used for any builtin word that does not
+/// require performing an asynchronous operation on the host, such as those
+/// which perform mathematical operations.
+/// 
+/// Synchronous builtins can be provided when the VM is constructed as a static
+/// slice of [`BuiltinEntry`]s. They may also be added at runtime using the
+/// [`AsyncForth::add_sync_builtin`] and
+/// [`AsyncForth::add_sync_builtin_static_name`] method. These methods are
+/// identical to the [`Forth::add_builtin`] and
+/// [`Forth::add_builtin_static_name`] methods.
+///
 /// [`Future`]: core::future::Future
 /// [`async fn`]: https://doc.rust-lang.org/stable/std/keyword.async.html
 /// [`.await`]: https://doc.rust-lang.org/stable/std/keyword.await.html
