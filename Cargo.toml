@@ -17,3 +17,8 @@ async = []
 
 [dev-dependencies]
 futures = "0.3.28"
+tokio = { version = "1.28.1", features = ["rt", "macros", "time"] }
+
+[[example]]
+name = "tokio_repl"
+required-features = ["async", "use-std"]
