@@ -9,7 +9,7 @@ pub mod fastr;
 pub mod input;
 pub mod output;
 pub mod stack;
-pub mod vm;
+pub(crate) mod vm;
 pub mod word;
 
 #[cfg(any(test, feature = "use-std"))]

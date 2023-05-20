@@ -1,5 +1,37 @@
-use core::ptr::NonNull;
+//! # Disk interface
+//!
+//! This module provides an implementation of a basic block device
+//! and management interface.
+//!
+//! Thie interface has five primary functions on the forth side:
+//!
+//! 1. `NUM block` - Opens block NUM, placing it in the cache. Like "open()"
+//! 2. `NUM buffer` - Creates a new block with NUM, initially empty. Like "create", but doesn't
+//!     truncate any existing contents until a flush occurs
+//! 3. `empty_buffers` - Clears the contents of any buffers, discarding any modified contents
+//! 4. `update` - Mark the buffer as "dirty" - meaning that if "flush" is called, or another
+//!    block is opened, the block will be persistent to disk.
+//! 5. `flush` - Write any open blocks with pending changes (e.g. `update` has been called) to disk.
+//!
+//! How this works:
+//!
+//! This implementation allows for two blocks in memory. Blocks are assumed to be the same size
+//! on disk and in memory.
+//!
+//! When `NUM block` is called, any existing contents of the given block number will be loaded from
+//! disk into memory. A pointer to the memory buffer location is placed on the stack. `buffer`
+//! works similarly, but starts with an empty memory block instead of loading the current disk
+//! contents. If `NUM` is not a valid block number, an error will be raised.
+//!
+//! At any point, 0..=2 blocks can be open. If a third block is opened, if the oldest block has
+//! any pending changes, they will be automatically flushed back to disk, "closing" the file.
+//!
+//! Just *writing* to the disk buffer does not mark it dirty. A call to `update` must be made to
+//! mark a block cache dirty.
+//!
+//! A call to `flush` can be used to immediately write any changes (in either block) to disk.
 
+use core::ptr::NonNull;
 use crate::{word::Word, Error, Forth, WordFunc};
 
 #[derive(Debug, PartialEq)]

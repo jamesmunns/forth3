@@ -30,11 +30,6 @@ mod async_vm;
 pub use self::async_vm::AsyncForth;
 
 /// Forth is the "context" of the VM/interpreter.
-///
-/// It does NOT include the input/output buffers, or any components that
-/// directly rely on those buffers. This Forth context is composed with
-/// the I/O buffers to create the `Fif` type. This is done for lifetime
-/// reasons.
 pub struct Forth<T: 'static> {
     mode: Mode,
     pub data_stack: Stack<Word>,

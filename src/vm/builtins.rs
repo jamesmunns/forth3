@@ -9,10 +9,10 @@ use crate::{
 };
 
 #[cfg(feature = "floats")]
-pub mod floats;
+mod floats;
 
 #[cfg(feature = "bitops")]
-pub mod bitops;
+mod bitops;
 
 // NOTE: This macro exists because we can't have const constructors that include
 // "mut" items, which unfortunately covers things like `fn(&mut T)`. Use a macro
