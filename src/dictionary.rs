@@ -62,10 +62,30 @@ pub struct DictionaryEntry<T: 'static> {
     pub(crate) parameter_field: [Word; 0],
 }
 
-pub struct DictionaryBump {
+pub struct Dictionary<T: 'static> {
+    pub(crate) alloc: DictionaryBump,
+    pub(crate) tail: Option<NonNull<DictionaryEntry<T>>>,
+}
+
+pub(crate) struct EntryBuilder<'dict, T: 'static> {
+    dict: &'dict mut Dictionary<T>,
+    len: u16,
+    base: NonNull<DictionaryEntry<T>>,
+    kind: EntryKind,
+}
+
+pub(crate) struct DictionaryBump {
     pub(crate) start: *mut u8,
     pub(crate) cur: *mut u8,
     pub(crate) end: *mut u8,
+}
+
+/// Iterator over a [`Dictionary`]'s entries.
+pub(crate) struct Entries<'dict, T: 'static> {
+    next: Option<NonNull<DictionaryEntry<T>>>,
+    /// Ensure that the `Entries` iterator is bound to the dictionary's
+    /// lifetime.
+    _dict: PhantomData<&'dict Dictionary<T>>,
 }
 
 #[cfg(feature = "async")]
@@ -184,10 +204,136 @@ impl<T: 'static> DictionaryEntry<T> {
         let pfp: *mut [Word; 0] = addr_of_mut!((*ptr).parameter_field);
         NonNull::new_unchecked(pfp.cast::<Word>())
     }
+
+    pub fn parameters(&self) -> &[Word] {
+        let pfp = self.parameter_field.as_ptr();
+        unsafe { core::slice::from_raw_parts(pfp, self.hdr.len as usize) }
+    }
+}
+
+impl<T: 'static> Dictionary<T> {
+    pub(crate) fn new(bottom: *mut u8, size: usize) -> Self {
+        Self {
+            alloc: DictionaryBump::new(bottom, size),
+            tail: None,
+        }
+    }
+
+    pub(crate) fn add_bi_fastr(&mut self, name: FaStr, bi: WordFunc<T>) -> Result<(), BumpError> {
+        // Allocate and initialize the dictionary entry
+        let dict_base = self.alloc.bump::<DictionaryEntry<T>>()?;
+        unsafe {
+            dict_base.as_ptr().write(DictionaryEntry {
+                hdr: EntryHeader {
+                    name,
+                    kind: EntryKind::RuntimeBuiltin,
+                    len: 0,
+                    _pd: PhantomData,
+                },
+                func: bi,
+                link: self.tail.take(),
+                parameter_field: [],
+            });
+        }
+        self.tail = Some(dict_base);
+        Ok(())
+    }
+
+    pub(crate) fn build_entry(&mut self) -> Result<EntryBuilder<'_, T>, BumpError> {
+        let base = self.alloc.bump::<DictionaryEntry<T>>()?;
+        Ok(EntryBuilder {
+            base,
+            len: 0,
+            dict: self,
+            kind: EntryKind::Dictionary,
+        })
+    }
+
+    pub(crate) fn entries(&self) -> Entries<'_, T> {
+        Entries {
+            next: self.tail,
+            _dict: PhantomData,
+        }
+    }
+
+    /// Performs a deep copy of all entries in `self` into `other`.
+    ///
+    /// This is an *O*(*entries*) operation, as it traverses all entries in
+    /// `self` and constructs new entries in `other` with the same data. This
+    /// means that all pointers in the `other` dictionary should point into
+    /// `other`'s bump arena, rather than `self`'s. Changes to bindings in
+    /// `self` after a deep copy is performed will not effect bindings in
+    /// `other`, and changes to bindings in `other` will not effect the existing
+    /// bindings in `self`.
+    ///
+    /// # Errors
+    ///
+    /// This method returns an error if `other`'s bump arena lacks sufficient
+    /// capacity to store all the entries in `self`.
+    pub(crate) fn deep_copy(&self, other: &mut Self) -> Result<(), BumpError> {
+        // before doing a partial copy, check that other has room for everything
+        let remaining = other.alloc.capacity() - other.alloc.used();
+        if remaining < self.alloc.used() {
+            return Err(BumpError::OutOfMemory);
+        }
+
+        for entry in self.entries() {
+            debug_assert!(matches!(entry.hdr.kind, EntryKind::RuntimeBuiltin | EntryKind::Dictionary));
+            // TODO(eliza): i think this might be potentially wasteful if the
+            // entry's name came from a `'static str` rather than a runtime
+            // string...can we track that and avoid interning it into the new dict?
+            let name = other.alloc.bump_str(entry.hdr.name.as_str())?;
+
+            // NOTE(eliza): the capacity check means we should be able to unwrap
+            // this, I think, but whatever...
+            let mut other_entry = other.build_entry()?;
+            for word in entry.parameters() {
+                other_entry = other_entry.write_word(*word)?;
+            }
+            other_entry.kind(entry.hdr.kind).finish(name, entry.func);
+        }
+
+        Ok(())
+    }
+}
+
+impl<T> EntryBuilder<'_, T> {
+    pub(crate) fn write_word(mut self, word: Word) -> Result<Self, BumpError> {
+        self.dict.alloc.bump_write(word)?;
+        self.len += 1;
+        Ok(self)
+    }
+
+    fn kind(self, kind: EntryKind) -> Self {
+        Self { kind, ..self }
+    }
+
+    pub(crate) fn finish(self, name: FaStr, func: WordFunc<T>) {
+        unsafe {
+            self.base.as_ptr().write(DictionaryEntry {
+                hdr: EntryHeader {
+                    name,
+                    kind: self.kind,
+                    len: self.len,
+                    _pd: PhantomData
+                },
+                // TODO: Should arrays push length and ptr? Or just ptr?
+                //
+                // TODO: Should we look up `(variable)` for consistency?
+                // Use `find_word`?
+                func,
+
+                // Don't link until we know we have a "good" entry!
+                link: self.dict.tail.take(),
+                parameter_field: [],
+            });
+        }
+        self.dict.tail = Some(self.base);
+    }
 }
 
 impl DictionaryBump {
-    pub fn new(bottom: *mut u8, size: usize) -> Self {
+    fn new(bottom: *mut u8, size: usize) -> Self {
         let end = bottom.wrapping_add(size);
         debug_assert!(end >= bottom);
         Self {
@@ -282,6 +428,25 @@ impl DictionaryBump {
 
     pub fn used(&self) -> usize {
         (self.cur as usize) - (self.start as usize)
+    }
+}
+
+// === impl Entries ===
+
+impl<'dict, T: 'static> Iterator for Entries<'dict, T> {
+    type Item = &'dict DictionaryEntry<T>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let entry = self.next.take()?;
+        let entry = unsafe {
+            // Safety: `self.next` must be a pointer into the VM's dictionary
+            // entries. The caller who constructs a `Entries` iterator is
+            // responsible for ensuring this.
+            entry.as_ref()
+        };
+        self.next = entry.link;
+        Some(entry)
     }
 }
 

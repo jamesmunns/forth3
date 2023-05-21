@@ -289,6 +289,115 @@ pub mod test {
         assert_eq!(&context.contents, &[6, 5, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
 
+    #[test]
+    fn it_still_works_when_deepcopied() {
+        let mut lbforth1 = LBForth::from_params(
+            LBForthParams::default(),
+            TestContext::default(),
+            Forth::<TestContext>::FULL_BUILTINS,
+        );
+
+        let forth1 = &mut lbforth1.forth;
+
+        // run all the tests on the first forth VM
+        println!("\n --- testing first forth VM --- \n");
+        test_lines("forth1", forth1, TEST_LINES);
+
+        // create a new forth VM, and deep copy the first VM's dictionary into
+        // the second.
+        let mut lbforth2 = LBForth::from_params(
+            LBForthParams::default(),
+            TestContext::default(),
+            Forth::<TestContext>::FULL_BUILTINS,
+        );
+
+        let forth2 = &mut lbforth2.forth;
+        forth1.dict.deep_copy(&mut forth2.dict).expect("deep copy should work");
+
+        let lines = &[
+            // all the bindings in the old VM's dictionary should be present in the
+            // new VM (and, it shouldn't segfault... :D)
+            ("yay yay yay", "5 5 5 ok.\n"),
+            ("boop", "5 5 ok.\n"),
+            ("0 err", "5 5 ok.\n"),
+            ("1 err", "5 5 5 5 5 5 ok.\n"),
+            ("0 erf", "5 5 ok.\n"),
+            ("1 erf", "5 5 5 5 5 5 5 5 ok.\n"),
+            ("  0 nif", "ok.\n"),
+            ("0 1 nif", "1 6 1 ok.\n"),
+            ("1 1 nif", "1 2 2 1 ok.\n"),
+            ("star star star", "***ok.\n"),
+            ("sloop", "1 **********6 ok.\n"),
+            ("count", "0 1 2 3 4 5 6 7 8 9 ok.\n"),
+            ("smod", "****ok.\n"),
+            ("beep", "hello, world!ok.\n"),
+            ("x .", "123 ok.\n"),
+            ("4 x + .", "127 ok.\n"),
+            // the existing `y` variable should have its second value from the
+            // first test.
+            ("y @ .", "10 ok.\n"),
+            // reassigning `y` is okay
+            ("100 y !", "ok.\n"),
+            ("y @ .", "100 ok.\n"),
+            // also reassign `a`
+            ("500 a !", "ok.\n"),
+            ("z @ . z 1 w+ @ . z 2 w+ @ . z 3 w+ @ .", "0 0 0 0 ok.\n"),
+            // define a new word in `forth2`.
+            (": star3 star star star ;", "ok.\n"),
+            ("star3", "***ok.\n"),
+            // define a new variable in forth2
+            ("variable foo", "ok.\n"),
+            ("foo @ .", "0 ok.\n"),
+            ("123 foo !", "ok.\n"),
+            ("foo @ .", "123 ok.\n"),
+        ];
+
+        println!("\n --- testing second forth VM --- \n");
+        test_lines("forth2", forth2, lines);
+
+        // check that forth1's bindings aren't clobbered
+        println!("\n --- retesting first VM's bindings --- \n");
+        test_lines("forth1", forth1, &[
+            // the existing `y` variable should have its second value from the
+            // first test.
+            ("y @ .", "10 ok.\n"),
+            ("a @ .", "100 ok.\n"),
+        ]);
+        // new words defined in forth2 don't exist in forth1
+        forth1.input.fill("star3").unwrap();
+        assert_eq!(forth1.process_line(), Err(Error::LookupFailed));
+        forth1.output.clear();
+        forth1.return_stack.clear();
+
+        // and neither do new variables.
+        forth1.input.fill("foo @ .").unwrap();
+        assert_eq!(forth1.process_line(), Err(Error::LookupFailed));
+        forth1.output.clear();
+        forth1.return_stack.clear();
+    }
+
+    #[test]
+    fn execute() {
+        let mut lbforth = LBForth::from_params(
+            LBForthParams::default(),
+            TestContext::default(),
+            Forth::<TestContext>::FULL_BUILTINS,
+        );
+        let forth = &mut lbforth.forth;
+
+        test_lines("", forth, &[
+            // define two words
+            (": hello .\" hello, world!\" ;", "ok.\n"),
+            (": goodbye .\" goodbye, world!\" ;", "ok.\n"),
+            // take their addresses
+            ("' goodbye", "ok.\n"),
+            ("' hello", "ok.\n"),
+            // and exec them!
+            ("execute", "hello, world!ok.\n"),
+            ("execute", "goodbye, world!ok.\n"),
+        ]);
+    }
+      
     fn test_lines(name: &str, forth: &mut Forth<TestContext>, lines: &[(&str, &str)]) {
         let pad = if name.is_empty() {
             ""
@@ -303,29 +412,6 @@ pub mod test {
             assert_eq!(forth.output.as_str(), *out);
             forth.output.clear();
         }
-    }
-
-    #[test]
-    fn execute() {
-        let mut lbforth = LBForth::from_params(
-            LBForthParams::default(),
-            TestContext::default(),
-            Forth::<TestContext>::FULL_BUILTINS,
-        );
-
-        let forth = &mut lbforth.forth;
-
-        test_lines("", forth, &[
-            // define two words
-            (": hello .\" hello, world!\" ;", "ok.\n"),
-            (": goodbye .\" goodbye, world!\" ;", "ok.\n"),
-            // take their addresses
-            ("' goodbye", "ok.\n"),
-            ("' hello", "ok.\n"),
-            // and exec them!
-            ("execute", "hello, world!ok.\n"),
-            ("execute", "goodbye, world!ok.\n"),
-        ]);
     }
 
     struct CountingFut<'forth> {
@@ -434,60 +520,61 @@ pub mod test {
         test_forth(&mut lbforth.forth, |forth| futures::executor::block_on(forth.process_line()), AsyncForth::vm_mut)
     }
 
-    fn test_forth<T>(forth: &mut T, process_line: impl Fn(&mut T) -> Result<(), Error>, get_forth: impl Fn(&mut T) -> &mut Forth<TestContext>) {
-        assert_eq!(0, get_forth(forth).dict_alloc.used());
-        let lines = &[
-            ("2 3 + .", "5 ok.\n"),
-            (": yay 2 3 + . ;", "ok.\n"),
-            ("yay yay yay", "5 5 5 ok.\n"),
-            (": boop yay yay ;", "ok.\n"),
-            ("boop", "5 5 ok.\n"),
-            (": err if boop boop boop else yay yay then ;", "ok.\n"),
-            (": erf if boop boop boop then yay yay ;", "ok.\n"),
-            ("0 err", "5 5 ok.\n"),
-            ("1 err", "5 5 5 5 5 5 ok.\n"),
-            ("0 erf", "5 5 ok.\n"),
-            ("1 erf", "5 5 5 5 5 5 5 5 ok.\n"),
-            (": one 1 . ;", "ok.\n"),
-            (": two 2 . ;", "ok.\n"),
-            (": six 6 . ;", "ok.\n"),
-            (": nif if one if two two else six then one then ;", "ok.\n"),
-            ("  0 nif", "ok.\n"),
-            ("0 1 nif", "1 6 1 ok.\n"),
-            ("1 1 nif", "1 2 2 1 ok.\n"),
-            ("42 emit", "*ok.\n"),
-            (": star 42 emit ;", "ok.\n"),
-            ("star star star", "***ok.\n"),
-            (": sloop one 5 0 do star star loop six ;", "ok.\n"),
-            ("sloop", "1 **********6 ok.\n"),
-            (": count 10 0 do i . loop ;", "ok.\n"),
-            ("count", "0 1 2 3 4 5 6 7 8 9 ok.\n"),
-            (": smod 10 0 do i 3 mod not if star then loop ;", "ok.\n"),
-            ("smod", "****ok.\n"),
-            (": beep .\" hello, world!\" ;", "ok.\n"),
-            ("beep", "hello, world!ok.\n"),
-            ("constant x 123", "ok.\n"),
-            ("x .", "123 ok.\n"),
-            ("4 x + .", "127 ok.\n"),
-            ("variable y", "ok.\n"),
-            ("y @ .", "0 ok.\n"),
-            ("10 y !", "ok.\n"),
-            ("y @ .", "10 ok.\n"),
-            ("array z 4", "ok.\n"),
-            ("z @ . z 1 w+ @ . z 2 w+ @ . z 3 w+ @ .", "0 0 0 0 ok.\n"),
-            ("10 z ! 20 z 1 w+ ! 30 z 2 w+ ! 40 z 3 w+ !", "ok.\n"),
-            (
-                "z @ . z 1 w+ @ . z 2 w+ @ . z 3 w+ @ .",
-                "10 20 30 40 ok.\n",
-            ),
-            ("forget z", "ok.\n"),
-            ("variable a", "ok.\n"),
-            ("100 a !", "ok.\n"),
-            ("array z 4", "ok.\n"),
-            ("z @ . z 1 w+ @ . z 2 w+ @ . z 3 w+ @ .", "0 0 0 0 ok.\n"),
-        ];
+    const TEST_LINES: &[(&str, &str)]  = &[
+        ("2 3 + .", "5 ok.\n"),
+        (": yay 2 3 + . ;", "ok.\n"),
+        ("yay yay yay", "5 5 5 ok.\n"),
+        (": boop yay yay ;", "ok.\n"),
+        ("boop", "5 5 ok.\n"),
+        (": err if boop boop boop else yay yay then ;", "ok.\n"),
+        (": erf if boop boop boop then yay yay ;", "ok.\n"),
+        ("0 err", "5 5 ok.\n"),
+        ("1 err", "5 5 5 5 5 5 ok.\n"),
+        ("0 erf", "5 5 ok.\n"),
+        ("1 erf", "5 5 5 5 5 5 5 5 ok.\n"),
+        (": one 1 . ;", "ok.\n"),
+        (": two 2 . ;", "ok.\n"),
+        (": six 6 . ;", "ok.\n"),
+        (": nif if one if two two else six then one then ;", "ok.\n"),
+        ("  0 nif", "ok.\n"),
+        ("0 1 nif", "1 6 1 ok.\n"),
+        ("1 1 nif", "1 2 2 1 ok.\n"),
+        ("42 emit", "*ok.\n"),
+        (": star 42 emit ;", "ok.\n"),
+        ("star star star", "***ok.\n"),
+        (": sloop one 5 0 do star star loop six ;", "ok.\n"),
+        ("sloop", "1 **********6 ok.\n"),
+        (": count 10 0 do i . loop ;", "ok.\n"),
+        ("count", "0 1 2 3 4 5 6 7 8 9 ok.\n"),
+        (": smod 10 0 do i 3 mod not if star then loop ;", "ok.\n"),
+        ("smod", "****ok.\n"),
+        (": beep .\" hello, world!\" ;", "ok.\n"),
+        ("beep", "hello, world!ok.\n"),
+        ("constant x 123", "ok.\n"),
+        ("x .", "123 ok.\n"),
+        ("4 x + .", "127 ok.\n"),
+        ("variable y", "ok.\n"),
+        ("y @ .", "0 ok.\n"),
+        ("10 y !", "ok.\n"),
+        ("y @ .", "10 ok.\n"),
+        ("array z 4", "ok.\n"),
+        ("z @ . z 1 w+ @ . z 2 w+ @ . z 3 w+ @ .", "0 0 0 0 ok.\n"),
+        ("10 z ! 20 z 1 w+ ! 30 z 2 w+ ! 40 z 3 w+ !", "ok.\n"),
+        (
+            "z @ . z 1 w+ @ . z 2 w+ @ . z 3 w+ @ .",
+            "10 20 30 40 ok.\n",
+        ),
+        ("forget z", "ok.\n"),
+        ("variable a", "ok.\n"),
+        ("100 a !", "ok.\n"),
+        ("array z 4", "ok.\n"),
+        ("z @ . z 1 w+ @ . z 2 w+ @ . z 3 w+ @ .", "0 0 0 0 ok.\n"),
+    ];
 
-        for (line, out) in lines {
+    fn test_forth<T>(forth: &mut T, process_line: impl Fn(&mut T) -> Result<(), Error>, get_forth: impl Fn(&mut T) -> &mut Forth<TestContext>) {
+        assert_eq!(0, get_forth(forth).dict.alloc.used());
+
+        for (line, out) in TEST_LINES {
             println!("{}", line);
             get_forth(forth).input.fill(line).unwrap();
             process_line(forth).unwrap();
@@ -526,7 +613,7 @@ pub mod test {
         // Uncomment if you want to check how much of the dictionary
         // was used during a test run.
         //
-        // assert_eq!(176, forth.dict_alloc.used());
+        // assert_eq!(176, forth.dict.alloc.used());
 
         // Uncomment this if you want to see the output of the
         // forth run. TODO: Remove this once we implement the

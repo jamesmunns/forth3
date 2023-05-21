@@ -187,8 +187,8 @@ impl<T: 'static> Forth<T> {
     ];
 
     pub fn dict_free(&mut self) -> Result<(), Error> {
-        let capa = self.dict_alloc.capacity();
-        let used = self.dict_alloc.used();
+        let capa = self.dict.alloc.capacity();
+        let used = self.dict.alloc.used();
         let free = capa - used;
         writeln!(
             &mut self.output,
@@ -223,19 +223,11 @@ impl<T: 'static> Forth<T> {
     }
 
     pub fn list_dict(&mut self) -> Result<(), Error> {
-        let Self {
-            run_dict_tail,
-            output,
-            ..
-        } = self;
+        let Self { output, dict, .. } = self;
         output.write_str("dictionary: ")?;
-        let mut cur = *run_dict_tail;
-
-        while let Some(item) = cur.take() {
-            let item = unsafe { item.as_ref() };
+        for item in dict.entries() {
             output.write_str(item.hdr.name.as_str())?;
             output.write_str(", ")?;
-            cur = item.link;
         }
         output.write_str("\n")?;
         Ok(())
@@ -324,21 +316,21 @@ impl<T: 'static> Forth<T> {
 
         // NOTE: We use the *name* pointer for rewinding, as we allocate the name before the item.
         let name_ptr = unsafe { defn.as_ref().hdr.name.as_ptr().cast_mut() };
-        self.run_dict_tail = unsafe { defn.as_ref().link };
+        self.dict.tail = unsafe { defn.as_ref().link };
         let addr = defn.as_ptr();
-        let name_contains = self.dict_alloc.contains(name_ptr.cast());
-        let contains = self.dict_alloc.contains(addr.cast());
-        let ordered = (addr as usize) <= (self.dict_alloc.cur as usize);
+        let name_contains = self.dict.alloc.contains(name_ptr.cast());
+        let contains = self.dict.alloc.contains(addr.cast());
+        let ordered = (addr as usize) <= (self.dict.alloc.cur as usize);
 
         if !(name_contains && contains && ordered) {
             return Err(Error::InternalError);
         }
 
-        let len = (self.dict_alloc.cur as usize) - (name_ptr as usize);
+        let len = (self.dict.alloc.cur as usize) - (name_ptr as usize);
         unsafe {
             name_ptr.write_bytes(0x00, len);
         }
-        self.dict_alloc.cur = name_ptr;
+        self.dict.alloc.cur = name_ptr;
         Ok(())
     }
 
@@ -729,14 +721,17 @@ impl<T: 'static> Forth<T> {
             .cur_word()
             .ok_or(Error::ColonCompileMissingName)?;
         let old_mode = core::mem::replace(&mut self.mode, Mode::Compile);
-        let name = self.dict_alloc.bump_str(name)?;
+        let name = self.dict.alloc.bump_str(name)?;
 
         // Allocate and initialize the dictionary entry
         //
         // TODO: Using `bump_write` here instead of just `bump` causes Miri to
         // get angry with a stacked borrows violation later when we attempt
         // to interpret a built word.
-        let dict_base = self.dict_alloc.bump::<DictionaryEntry<T>>()?;
+        // TODO(eliza): it's unfortunate we cannot easily use the "EntryBuilder"
+        // type here, as it must mutably borrow the dictionary, and `munch_one`
+        // must perform lookups...hmm...
+        let dict_base = self.dict.alloc.bump::<DictionaryEntry<T>>()?;
 
         let mut len = 0u16;
 
@@ -758,11 +753,11 @@ impl<T: 'static> Forth<T> {
                                 // Use `find_word`?
                                 func: Self::interpret,
                                 // Don't link until we know we have a "good" entry!
-                                link: self.run_dict_tail.take(),
+                                link: self.dict.tail.take(),
                                 parameter_field: [],
                             });
                         }
-                        self.run_dict_tail = Some(dict_base);
+                        self.dict.tail = Some(dict_base);
                         self.mode = old_mode;
                         return Ok(());
                     }

@@ -131,6 +131,40 @@ impl<T: 'static> LBForth<T> {
             _dict_buf,
         }
     }
+
+    pub fn new_child(params: LBForthParams, host_ctxt: T, parent: &Forth<T>) -> Self {
+        let _payload_dstack: LeakBox<Word> = LeakBox::new(params.data_stack_elems);
+        let _payload_rstack: LeakBox<Word> = LeakBox::new(params.return_stack_elems);
+        let _payload_cstack: LeakBox<CallContext<T>> = LeakBox::new(params.control_stack_elems);
+        let _input_buf: LeakBox<u8> = LeakBox::new(params.input_buf_elems);
+        let _output_buf: LeakBox<u8> = LeakBox::new(params.output_buf_elems);
+        let _dict_buf: LeakBox<u8> = LeakBox::new(params.dict_buf_elems);
+
+        let input = WordStrBuf::new(_input_buf.ptr(), _input_buf.len());
+        let output = OutputBuf::new(_output_buf.ptr(), _output_buf.len());
+        let forth = unsafe {
+            parent.new_child(
+                (_payload_dstack.ptr(), _payload_dstack.len()),
+                (_payload_rstack.ptr(), _payload_rstack.len()),
+                (_payload_cstack.ptr(), _payload_cstack.len()),
+                (_dict_buf.ptr(), _dict_buf.len()),
+                input,
+                output,
+                host_ctxt,
+            )
+            .unwrap()
+        };
+
+        Self {
+            forth,
+            _payload_dstack,
+            _payload_rstack,
+            _payload_cstack,
+            _input_buf,
+            _output_buf,
+            _dict_buf,
+        }
+    }
 }
 
 #[cfg(feature = "async")]
@@ -168,6 +202,43 @@ where
             )
             .unwrap()
         };
+
+        Self {
+            forth,
+            _payload_dstack,
+            _payload_rstack,
+            _payload_cstack,
+            _input_buf,
+            _output_buf,
+            _dict_buf,
+        }
+    }
+
+    pub fn new_child(params: LBForthParams, host_ctxt: T, parent: &Forth<T>, builtins: D) -> Self {
+        let _payload_dstack: LeakBox<Word> = LeakBox::new(params.data_stack_elems);
+        let _payload_rstack: LeakBox<Word> = LeakBox::new(params.return_stack_elems);
+        let _payload_cstack: LeakBox<CallContext<T>> = LeakBox::new(params.control_stack_elems);
+        let _input_buf: LeakBox<u8> = LeakBox::new(params.input_buf_elems);
+        let _output_buf: LeakBox<u8> = LeakBox::new(params.output_buf_elems);
+        let _dict_buf: LeakBox<u8> = LeakBox::new(params.dict_buf_elems);
+
+        let input = WordStrBuf::new(_input_buf.ptr(), _input_buf.len());
+        let output = OutputBuf::new(_output_buf.ptr(), _output_buf.len());
+        let forth = {
+            let vm = unsafe {
+            parent.new_child(
+                (_payload_dstack.ptr(), _payload_dstack.len()),
+                (_payload_rstack.ptr(), _payload_rstack.len()),
+                (_payload_cstack.ptr(), _payload_cstack.len()),
+                (_dict_buf.ptr(), _dict_buf.len()),
+                input,
+                output,
+                host_ctxt,
+            )}
+            .unwrap();
+            AsyncForth::<T, D> {vm, builtins }
+        };
+
 
         Self {
             forth,
