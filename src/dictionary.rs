@@ -4,6 +4,8 @@ use core::alloc::Layout;
 use core::marker::PhantomData;
 use core::ptr::addr_of_mut;
 use core::ptr::NonNull;
+use core::ops::Deref;
+use portable_atomic::{Ordering, AtomicUsize};
 
 #[derive(Debug, PartialEq)]
 pub enum BumpError {
@@ -63,13 +65,29 @@ pub struct DictionaryEntry<T: 'static> {
     pub(crate) parameter_field: [Word; 0],
 }
 
-pub struct Dictionary<T: 'static> {
+pub struct Dictionary<T: 'static, D: DropDict> {
     pub(crate) alloc: DictionaryBump,
     pub(crate) tail: Option<NonNull<DictionaryEntry<T>>>,
+    /// Reference count, used to determine when the dictionary can be dropped.
+    /// If this is `usize::MAX`, the dictionary is mutable.
+    refs: portable_atomic::AtomicUsize,
+    /// Parent dictionary.
+    ///
+    /// When looking up a binding that isn't present in `self`, we traverse this
+    /// chain of references. When dropping the dictionary, we decrement the
+    /// parent's ref count.
+    parent: Option<DictRef<T, D>>,
 }
 
-pub(crate) struct EntryBuilder<'dict, T: 'static> {
-    dict: &'dict mut Dictionary<T>,
+pub struct DictRef<T: 'static, D: DropDict>(NonNull<Dictionary<T, D>>);
+
+pub trait DropDict {
+    /// Deallocate a dictionary.
+    unsafe fn drop_dict<T>(dict: NonNull<Dictionary<T, Self>>);
+}
+
+pub(crate) struct EntryBuilder<'dict, T: 'static, D> {
+    dict: &'dict mut Dictionary<T, D>,
     len: u16,
     base: NonNull<DictionaryEntry<T>>,
     kind: EntryKind,
@@ -82,11 +100,11 @@ pub(crate) struct DictionaryBump {
 }
 
 /// Iterator over a [`Dictionary`]'s entries.
-pub(crate) struct Entries<'dict, T: 'static> {
+pub(crate) struct Entries<'dict, T: 'static, D: DropDict> {
     next: Option<NonNull<DictionaryEntry<T>>>,
     /// Ensure that the `Entries` iterator is bound to the dictionary's
     /// lifetime.
-    _dict: PhantomData<&'dict Dictionary<T>>,
+    _dict: &'dict Dictionary<T, D>,
 }
 
 #[cfg(feature = "async")]
@@ -212,15 +230,19 @@ impl<T: 'static> DictionaryEntry<T> {
     }
 }
 
-impl<T: 'static> Dictionary<T> {
+impl<T: 'static, D: DropDict> Dictionary<T, D> {
+    const MUTABLE: usize = usize::MAX;
     pub(crate) fn new(bottom: *mut u8, size: usize) -> Self {
         Self {
             alloc: DictionaryBump::new(bottom, size),
             tail: None,
+            refs: AtomicUsize::new(Self::MUTABLE),
+            parent: None,
         }
     }
 
     pub(crate) fn add_bi_fastr(&mut self, name: FaStr, bi: WordFunc<T>) -> Result<(), BumpError> {
+        debug_assert_eq!(self.refs.load(Ordering::Acquire), Self::MUTABLE);
         // Allocate and initialize the dictionary entry
         let dict_base = self.alloc.bump::<DictionaryEntry<T>>()?;
         unsafe {
@@ -240,7 +262,7 @@ impl<T: 'static> Dictionary<T> {
         Ok(())
     }
 
-    pub(crate) fn build_entry(&mut self) -> Result<EntryBuilder<'_, T>, BumpError> {
+    pub(crate) fn build_entry(&mut self) -> Result<EntryBuilder<'_, T, D>, BumpError> {
         let base = self.alloc.bump::<DictionaryEntry<T>>()?;
         Ok(EntryBuilder {
             base,
@@ -250,10 +272,10 @@ impl<T: 'static> Dictionary<T> {
         })
     }
 
-    pub(crate) fn entries(&self) -> Entries<'_, T> {
+    pub(crate) fn entries(&self) -> Entries<'_, T, D> {
         Entries {
             next: self.tail,
-            _dict: PhantomData,
+            _dict: self,
         }
     }
 
@@ -272,33 +294,125 @@ impl<T: 'static> Dictionary<T> {
     /// This method returns an error if `other`'s bump arena lacks sufficient
     /// capacity to store all the entries in `self`.
     pub(crate) fn deep_copy(&self, other: &mut Self) -> Result<(), BumpError> {
-        // before doing a partial copy, check that other has room for everything
-        let remaining = other.alloc.capacity() - other.alloc.used();
-        if remaining < self.alloc.used() {
-            return Err(BumpError::OutOfMemory);
-        }
-
-        for entry in self.entries() {
-            debug_assert!(matches!(entry.hdr.kind, EntryKind::RuntimeBuiltin | EntryKind::Dictionary));
-            // TODO(eliza): i think this might be potentially wasteful if the
-            // entry's name came from a `'static str` rather than a runtime
-            // string...can we track that and avoid interning it into the new dict?
-            let name = other.alloc.bump_str(entry.hdr.name.as_str())?;
-
-            // NOTE(eliza): the capacity check means we should be able to unwrap
-            // this, I think, but whatever...
-            let mut other_entry = other.build_entry()?;
-            for word in entry.parameters() {
-                other_entry = other_entry.write_word(*word)?;
-            }
-            other_entry.kind(entry.hdr.kind).finish(name, entry.func);
-        }
-
-        Ok(())
+        panic!("eliza: bad, get rid of this")
     }
 }
 
-impl<T> EntryBuilder<'_, T> {
+impl<T: 'static, D: DropDict> Drop for Dictionary<T, D> {
+    fn drop(&mut self) {
+        unsafe {
+            D::drop_dict(NonNull::from(self))
+        }
+    }
+}
+
+// === DictRef ===
+
+impl<T: 'static, D: DropDict> DictRef<T, D> {
+    const MAX_REFCOUNT: usize = Dictionary::<T, D>::MUTABLE - 1;
+
+
+    // Non-inlined part of `drop`.
+    #[inline(never)]
+    unsafe fn drop_slow(&mut self) {
+        unsafe {
+            // Allow the data's destructor to run.
+            core::ptr::drop_in_place(self.0.as_mut())
+        }
+    }
+}
+
+impl <T: 'static, D: DropDict> Deref for DictRef<T, D> {
+    type Target = Dictionary<T, D>;
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.0.as_ref() }
+    }
+}
+
+impl<T: 'static, D: DropDict> Clone for DictRef<T, D>{
+    #[inline]
+    fn clone(&self) -> Self {
+        // Using a relaxed ordering is alright here, as knowledge of the
+        // original reference prevents other threads from erroneously deleting
+        // the object.
+        //
+        // As explained in the [Boost documentation][1], Increasing the
+        // reference counter can always be done with memory_order_relaxed: New
+        // references to an object can only be formed from an existing
+        // reference, and passing an existing reference from one thread to
+        // another must already provide any required synchronization.
+        //
+        // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
+        let old_size = self.refs.strong.fetch_add(1, Ordering::Relaxed);
+
+        // However we need to guard against massive refcounts in case someone is `mem::forget`ing
+        // `DictRef`s. If we don't do this the count can overflow and users will use-after free. This
+        // branch will never be taken in any realistic program. We abort because such a program is
+        // incredibly degenerate, and we don't care to support it.
+        //
+        // This check is not 100% water-proof: we error when the refcount grows beyond `isize::MAX`.
+        // But we do that check *after* having done the increment, so there is a chance here that
+        // the worst already happened and we actually do overflow the `usize` counter. However, that
+        // requires the counter to grow from `isize::MAX` to `usize::MAX` between the increment
+        // above and the `abort` below, which seems exceedingly unlikely.
+        if old_size == Self::MAX_REFCOUNT {
+            unreachable!("bad news")
+        }
+
+        unsafe { Self(self.0) }
+    }
+}
+
+
+impl<T: 'static, D: DropDict> Drop for DictRef<T, D>{
+    #[inline]
+    fn drop(&mut self) {
+        // Because `fetch_sub` is already atomic, we do not need to synchronize
+        // with other threads unless we are going to delete the object. This
+        // same logic applies to the below `fetch_sub` to the `weak` count.
+        if self.refs.fetch_sub(1, Ordering::Release) != 1 {
+            return;
+        }
+
+        // This fence is needed to prevent reordering of use of the data and
+        // deletion of the data. Because it is marked `Release`, the decreasing
+        // of the reference count synchronizes with this `Acquire` fence. This
+        // means that use of the data happens before decreasing the reference
+        // count, which happens before this fence, which happens before the
+        // deletion of the data.
+        //
+        // As explained in the [Boost documentation][1],
+        //
+        // > It is important to enforce any possible access to the object in one
+        // > thread (through an existing reference) to *happen before* deleting
+        // > the object in a different thread. This is achieved by a "release"
+        // > operation after dropping a reference (any access to the object
+        // > through this reference must obviously happened before), and an
+        // > "acquire" operation before deleting the object.
+        //
+        // In particular, while the contents of an Arc are usually immutable, it's
+        // possible to have interior writes to something like a Mutex<T>. Since a
+        // Mutex is not acquired when it is deleted, we can't rely on its
+        // synchronization logic to make writes in thread A visible to a destructor
+        // running in thread B.
+        //
+        // Also note that the Acquire fence here could probably be replaced with an
+        // Acquire load, which could improve performance in highly-contended
+        // situations. See [2].
+        //
+        // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
+        // [2]: (https://github.com/rust-lang/rust/pull/41714)
+        portable_atomic::fence(Ordering::Acquire);
+
+        unsafe {
+            self.drop_slow();
+        }
+    }
+}
+
+// === EntryBuilder ===
+
+impl<T, D: DropDict> EntryBuilder<'_, T, D> {
     pub(crate) fn write_word(mut self, word: Word) -> Result<Self, BumpError> {
         self.dict.alloc.bump_write(word)?;
         self.len += 1;
@@ -434,8 +548,8 @@ impl DictionaryBump {
 
 // === impl Entries ===
 
-impl<'dict, T: 'static> Iterator for Entries<'dict, T> {
-    type Item = &'dict DictionaryEntry<T>;
+impl<'dict, T: 'static, D: DropDict> Iterator for Entries<'dict, T, D> {
+    type Item = &'dict DictionaryEntry<T>; 
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -446,7 +560,19 @@ impl<'dict, T: 'static> Iterator for Entries<'dict, T> {
             // responsible for ensuring this.
             entry.as_ref()
         };
-        self.next = entry.link;
+        match entry.link {
+            Some(next) => self.next = Some(next),
+            None => {
+                // traverse the parent link
+                if let Some(ref parent) = self.dict.parent {
+                    let dict = unsafe {
+                        parent.as_ref()
+                    };
+                    self.next = dict.tail;
+                    self.dict = dict;
+                }
+            }
+        }
         Some(entry)
     }
 }
