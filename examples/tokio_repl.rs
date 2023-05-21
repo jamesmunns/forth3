@@ -1,12 +1,9 @@
-use std::io::{stdin, stdout, Write};
-
+use std::{io::{stdin, stdout, Write}, sync::atomic::{Ordering, AtomicUsize}, future::Future, pin::Pin};
 use forth3::{
     leakbox::{AsyncLBForth, LBForthParams},
-    dictionary::{AsyncBuiltinEntry, AsyncBuiltins},fastr::FaStr,
-    Forth,
+    dictionary::{AsyncBuiltinEntry, AsyncBuiltins, EntryHeader},fastr::FaStr,
+    Forth, word::Word
 };
-use std::{future::Future, pin::Pin};
-
 
 struct AsyncDispatcher;
 impl<'forth> AsyncBuiltins<'forth, ()> for AsyncDispatcher {
@@ -14,7 +11,7 @@ impl<'forth> AsyncBuiltins<'forth, ()> for AsyncDispatcher {
 
     const BUILTINS: &'static [AsyncBuiltinEntry<()>] = &[
         forth3::async_builtin!("sleep"),
-        forth3::async_builtin!("sapwn"),
+        forth3::async_builtin!("spawn"),
     ];
 
     fn dispatch_async(
@@ -22,17 +19,28 @@ impl<'forth> AsyncBuiltins<'forth, ()> for AsyncDispatcher {
         id: &FaStr,
         forth: &'forth mut Forth<()>,
     ) -> Self::Future {
+        static TASKS: AtomicUsize = AtomicUsize::new(1);
         match id.as_str() {
             "sleep" => {
-                // Get value from top of stack
-                let secs: usize = forth.data_stack.pop().unwrap().try_into().unwrap();
                 Box::pin(async move {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(secs as u64)).await;
+                    // Get value from top of stack
+                    let ms: usize = forth.data_stack.try_pop()?.try_into()?;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(ms as u64)).await;
                     Ok(())
                 })
             },
             "spawn" => {
-                todo!("eliza: implement this!")
+                // XXX(eliza): this doesn't technically need to be an async
+                // builtin but i'm lazy and i didn't want to have to redefine
+                // all the default builtins...
+                Box::pin(async move {
+                    let w: Word = forth.data_stack.try_pop()?;
+                    let name = unsafe {
+                        w.ptr.cast::<EntryHeader<()>>().as_ref().unwrap().name
+                    }
+                    let new_vm = Lb
+                    Ok(())
+                })
             }
             id => panic!("Unknown async builtin {id}")
         }
@@ -61,18 +69,18 @@ async fn main() {
 
         let mut inp = String::new();
         loop {
-            print!("[{:?}] > ", t0.elapsed());
+            print!("[t0 {:?}] > ", t0.elapsed());
             stdout().flush().unwrap();
             stdin().read_line(&mut inp).unwrap();
             forth.input_mut().fill(&inp).unwrap();
             match forth.process_line().await {
                 Ok(()) => {
-                    print!("[{:?}] {}", t0.elapsed(), forth.output().as_str());
+                    print!("[t0 {:?}] {}", t0.elapsed(), forth.output().as_str());
                 }
                 Err(e) => {
                     println!();
-                    println!("Input failed. Error: {:?}", e);
-                    println!("Unprocessed tokens:");
+                    println!("t0: Input failed. Error: {:?}", e);
+                    println!("t0: Unprocessed tokens:");
                     while let Some(tok) = forth.input_mut().cur_word() {
                         print!("'{}', ", tok);
                         forth.input_mut().advance();
