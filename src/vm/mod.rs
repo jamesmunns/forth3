@@ -50,6 +50,13 @@ pub struct Forth<T: 'static> {
     async_builtins: &'static [AsyncBuiltinEntry<T>],
 }
 
+/// Iterator over a [`Forth`] VM's dictionary entries.
+struct DictEntries<'dict, T: 'static> {
+    next: Option<NonNull<DictionaryEntry<T>>>,
+    /// Ensure that the `DictEntries` is bound to the VM's lifetime.
+    _forth: PhantomData<&'dict Forth<T>>,
+}
+
 enum ProcessAction {
     Continue,
     Execute,
@@ -188,15 +195,7 @@ impl<T> Forth<T> {
     }
 
     fn find_in_dict(&self, fastr: &TmpFaStr<'_>) -> Option<NonNull<DictionaryEntry<T>>> {
-        let mut optr: Option<NonNull<DictionaryEntry<T>>> = self.run_dict_tail;
-        while let Some(ptr) = optr.take() {
-            let de = unsafe { ptr.as_ref() };
-            if &de.hdr.name == fastr.deref() {
-                return Some(ptr);
-            }
-            optr = de.link;
-        }
-        None
+        self.runtime_dict_entries().find(|&de| &de.hdr.name == fastr.deref()).map(NonNull::from)
     }
 
     pub fn lookup(&self, word: &str) -> Result<Lookup<T>, Error> {
@@ -751,5 +750,28 @@ impl<T> Forth<T> {
         }
         self.run_dict_tail = Some(dict_base);
         Ok(0)
+    }
+
+    fn runtime_dict_entries(&self) -> DictEntries<'_, T> {
+        DictEntries { next: self.run_dict_tail, _forth: PhantomData, }
+    }
+}
+
+// === impl DictEntries ===
+
+impl<'dict, T: 'static> Iterator for DictEntries<'dict, T> {
+    type Item = &'dict DictionaryEntry<T>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let entry = self.next.take()?;
+        let entry = unsafe {
+            // Safety: `self.next` must be a pointer into the VM's dictionary
+            // entries. The caller who constructs a `DictEntries` iterator is
+            // responsible for ensuring this.
+            entry.as_ref()
+        };
+        self.next = entry.link;
+        Some(entry)
     }
 }
