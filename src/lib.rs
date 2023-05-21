@@ -75,6 +75,8 @@ pub enum Error {
     BadWordOffset,
     BadArrayLength,
     DivideByZero,
+    AddrOfMissingName,
+    AddrOfNotAWord,
 
     // Not *really* an error - but signals that a function should be called
     // again. At the moment, only used for internal interpreter functions.
@@ -289,18 +291,6 @@ pub mod test {
 
     #[test]
     fn it_still_works_when_deepcopied() {
-        // TODO(eliza): this could also be used in other tests..
-        fn test_lines(name: &str, forth: &mut Forth<TestContext>, lines: &[(&str, &str)]) {
-            for (line, out) in lines {
-                println!("{name}: {line}");
-                forth.input.fill(line).unwrap();
-                forth.process_line().unwrap();
-                print!("{name} => {}", forth.output.as_str());
-                assert_eq!(forth.output.as_str(), *out);
-                forth.output.clear();
-            }
-        }
-
         let mut lbforth1 = LBForth::from_params(
             LBForthParams::default(),
             TestContext::default(),
@@ -384,6 +374,44 @@ pub mod test {
         assert_eq!(forth1.process_line(), Err(Error::LookupFailed));
         forth1.output.clear();
         forth1.return_stack.clear();
+    }
+
+    #[test]
+    fn execute() {
+        let mut lbforth = LBForth::from_params(
+            LBForthParams::default(),
+            TestContext::default(),
+            Forth::<TestContext>::FULL_BUILTINS,
+        );
+        let forth = &mut lbforth.forth;
+
+        test_lines("", forth, &[
+            // define two words
+            (": hello .\" hello, world!\" ;", "ok.\n"),
+            (": goodbye .\" goodbye, world!\" ;", "ok.\n"),
+            // take their addresses
+            ("' goodbye", "ok.\n"),
+            ("' hello", "ok.\n"),
+            // and exec them!
+            ("execute", "hello, world!ok.\n"),
+            ("execute", "goodbye, world!ok.\n"),
+        ]);
+    }
+      
+    fn test_lines(name: &str, forth: &mut Forth<TestContext>, lines: &[(&str, &str)]) {
+        let pad = if name.is_empty() {
+            ""
+        } else {
+            ": "
+        };
+        for (line, out) in lines {
+            println!("{name}{pad}{line}");
+            forth.input.fill(line).unwrap();
+            forth.process_line().unwrap();
+            print!("{name}{pad}=> {}", forth.output.as_str());
+            assert_eq!(forth.output.as_str(), *out);
+            forth.output.clear();
+        }
     }
 
     struct CountingFut<'forth> {
