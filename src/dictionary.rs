@@ -71,6 +71,7 @@ pub(crate) struct EntryBuilder<'dict, T: 'static> {
     dict: &'dict mut Dictionary<T>,
     len: u16,
     base: NonNull<DictionaryEntry<T>>,
+    kind: EntryKind,
 }
 
 pub(crate) struct DictionaryBump {
@@ -243,7 +244,8 @@ impl<T: 'static> Dictionary<T> {
         Ok(EntryBuilder {
             base,
             len: 0,
-            dict: self
+            dict: self,
+            kind: EntryKind::Dictionary,
         })
     }
 
@@ -284,24 +286,11 @@ impl<T: 'static> Dictionary<T> {
 
             // NOTE(eliza): the capacity check means we should be able to unwrap
             // this, I think, but whatever...
-            let base = other.alloc.bump::<DictionaryEntry<T>>()?;
+            let mut other_entry = other.build_entry()?;
             for word in entry.parameters() {
-                other.alloc.bump_write(*word)?;
+                other_entry = other_entry.write_word(*word)?;
             }
-            unsafe {
-                base.as_ptr().write(DictionaryEntry {
-                    hdr: EntryHeader {
-                        name,
-                        kind: entry.hdr.kind,
-                        len: entry.hdr.len,
-                        _pd: PhantomData,
-                    },
-                    func: entry.func,
-                    link: other.tail.take(),
-                    parameter_field: [],
-                });
-            }
-            other.tail = Some(base);
+            other_entry.kind(entry.hdr.kind).finish(name, entry.func);
         }
 
         Ok(())
@@ -315,12 +304,16 @@ impl<T> EntryBuilder<'_, T> {
         Ok(self)
     }
 
+    fn kind(self, kind: EntryKind) -> Self {
+        Self { kind, ..self }
+    }
+
     pub(crate) fn finish(self, name: FaStr, func: WordFunc<T>) {
         unsafe {
             self.base.as_ptr().write(DictionaryEntry {
                 hdr: EntryHeader {
                     name,
-                    kind: EntryKind::Dictionary,
+                    kind: self.kind,
                     len: self.len,
                     _pd: PhantomData
                 },
