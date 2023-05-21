@@ -1,6 +1,6 @@
 // For now...
 #![allow(clippy::missing_safety_doc)]
-#![cfg_attr(not(any(test, feature = "use-std")), no_std)]
+#![cfg_attr(not(any(test, doctest, feature = "use-std")), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 pub mod dictionary;
@@ -11,7 +11,7 @@ pub mod stack;
 pub(crate) mod vm;
 pub mod word;
 
-#[cfg(any(test, feature = "use-std"))]
+#[cfg(any(test, doctest, feature = "use-std"))]
 pub mod leakbox;
 
 #[cfg(any(test, doctest, feature = "_force_test_utils"))]
@@ -288,7 +288,7 @@ pub mod test {
 
         let forth = &mut lbforth.forth;
 
-        assert_eq!(0, forth.dict_alloc.used());
+        assert_eq!(0, forth.dict.alloc.used());
 
         blocking_runtest_with(forth, r#"
             > : yay 2 3 + . ;
