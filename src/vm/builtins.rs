@@ -765,6 +765,9 @@ impl<T: 'static> Forth<T> {
         // TODO: Using `bump_write` here instead of just `bump` causes Miri to
         // get angry with a stacked borrows violation later when we attempt
         // to interpret a built word.
+        // TODO(eliza): it's unfortunate we cannot easily use the "EntryBuilder"
+        // type here, as it must mutably borrow the dictionary, and `munch_one`
+        // must perform lookups...hmm...
         let dict_base = self.dict.alloc.bump::<DictionaryEntry<T>>()?;
 
         let mut len = 0u16;

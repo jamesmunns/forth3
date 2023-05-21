@@ -68,6 +68,12 @@ pub struct Dictionary<T: 'static> {
     pub(crate) tail: Option<NonNull<DictionaryEntry<T>>>,
 }
 
+pub(crate) struct EntryBuilder<'dict, T: 'static> {
+    dict: &'dict mut Dictionary<T>,
+    len: u16,
+    base: NonNull<DictionaryEntry<T>>,
+}
+
 pub(crate) struct DictionaryBump {
     pub(crate) start: *mut u8,
     pub(crate) cur: *mut u8,
@@ -228,18 +234,51 @@ impl<T: 'static> Dictionary<T> {
         Ok(())
     }
 
-    // /// # Safety
-    // /// 
-    // /// Base must be bump allocated by `self.alloc`.
-    // /// TODO(eliza): is there a way to make this method responsible for doing
-    // /// the allocation as well?
-    // pub(crate) unsafe fn write_entry(&mut self, base: NonNull<DictionaryEntry<T>>, hdr: EntryHeader<T>, )
+    pub(crate) fn build_entry(&mut self) -> Result<EntryBuilder<'_, T>, BumpError> {
+        let base = self.alloc.bump::<DictionaryEntry<T>>()?;
+        Ok(EntryBuilder {
+            base,
+            len: 0,
+            dict: self
+        })
+    }
 
     pub(crate) fn entries(&self) -> Entries<'_, T> {
         Entries {
             next: self.tail,
             _dict: PhantomData,
         }
+    }
+}
+
+impl<T> EntryBuilder<'_, T> {
+    pub(crate) fn write_word(mut self, word: Word) -> Result<Self, BumpError> {
+        self.dict.alloc.bump_write(word)?;
+        self.len += 1;
+        Ok(self)
+    }
+
+    pub(crate) fn finish(self, name: FaStr, func: WordFunc<T>) {
+        unsafe {
+            self.base.as_ptr().write(DictionaryEntry {
+                hdr: EntryHeader {
+                    name,
+                    kind: EntryKind::Dictionary,
+                    len: self.len,
+                    _pd: PhantomData
+                },
+                // TODO: Should arrays push length and ptr? Or just ptr?
+                //
+                // TODO: Should we look up `(variable)` for consistency?
+                // Use `find_word`?
+                func,
+
+                // Don't link until we know we have a "good" entry!
+                link: self.dict.tail.take(),
+                parameter_field: [],
+            });
+        }
+        self.dict.tail = Some(self.base);
     }
 }
 
