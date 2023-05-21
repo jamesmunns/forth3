@@ -394,7 +394,7 @@ pub mod test {
     }
 
     fn test_forth<T>(forth: &mut T, process_line: impl Fn(&mut T) -> Result<(), Error>, get_forth: impl Fn(&mut T) -> &mut Forth<TestContext>) {
-        assert_eq!(0, get_forth(forth).dict_alloc.used());
+        assert_eq!(0, get_forth(forth).dict.alloc.used());
         let lines = &[
             ("2 3 + .", "5 ok.\n"),
             (": yay 2 3 + . ;", "ok.\n"),
@@ -485,7 +485,7 @@ pub mod test {
         // Uncomment if you want to check how much of the dictionary
         // was used during a test run.
         //
-        // assert_eq!(176, forth.dict_alloc.used());
+        // assert_eq!(176, forth.dict.alloc.used());
 
         // Uncomment this if you want to see the output of the
         // forth run. TODO: Remove this once we implement the

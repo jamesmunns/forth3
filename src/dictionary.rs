@@ -62,10 +62,23 @@ pub struct DictionaryEntry<T: 'static> {
     pub(crate) parameter_field: [Word; 0],
 }
 
-pub struct DictionaryBump {
+pub struct Dictionary<T: 'static> {
+    pub(crate) alloc: DictionaryBump,
+    pub(crate) tail: Option<NonNull<DictionaryEntry<T>>>,
+}
+
+pub(crate) struct DictionaryBump {
     pub(crate) start: *mut u8,
     pub(crate) cur: *mut u8,
     pub(crate) end: *mut u8,
+}
+
+/// Iterator over a [`Dictionary`]'s entries.
+pub(crate) struct Entries<'dict, T: 'static> {
+    next: Option<NonNull<DictionaryEntry<T>>>,
+    /// Ensure that the `Entries` iterator is bound to the dictionary's
+    /// lifetime.
+    _dict: PhantomData<&'dict Dictionary<T>>,
 }
 
 #[cfg(feature = "async")]
@@ -186,8 +199,51 @@ impl<T: 'static> DictionaryEntry<T> {
     }
 }
 
+impl<T: 'static> Dictionary<T> {
+    pub(crate) fn new(bottom: *mut u8, size: usize) -> Self {
+        Self {
+            alloc: DictionaryBump::new(bottom, size),
+            tail: None,
+        }
+    }
+
+    pub(crate) fn add_bi_fastr(&mut self, name: FaStr, bi: WordFunc<T>) -> Result<(), BumpError> {
+        // Allocate and initialize the dictionary entry
+        let dict_base = self.alloc.bump::<DictionaryEntry<T>>()?;
+        unsafe {
+            dict_base.as_ptr().write(DictionaryEntry {
+                hdr: EntryHeader {
+                    name,
+                    kind: EntryKind::RuntimeBuiltin,
+                    len: 0,
+                    _pd: PhantomData,
+                },
+                func: bi,
+                link: self.tail.take(),
+                parameter_field: [],
+            });
+        }
+        self.tail = Some(dict_base);
+        Ok(())
+    }
+
+    // /// # Safety
+    // /// 
+    // /// Base must be bump allocated by `self.alloc`.
+    // /// TODO(eliza): is there a way to make this method responsible for doing
+    // /// the allocation as well?
+    // pub(crate) unsafe fn write_entry(&mut self, base: NonNull<DictionaryEntry<T>>, hdr: EntryHeader<T>, )
+
+    pub(crate) fn entries(&self) -> Entries<'_, T> {
+        Entries {
+            next: self.tail,
+            _dict: PhantomData,
+        }
+    }
+}
+
 impl DictionaryBump {
-    pub fn new(bottom: *mut u8, size: usize) -> Self {
+    fn new(bottom: *mut u8, size: usize) -> Self {
         let end = bottom.wrapping_add(size);
         debug_assert!(end >= bottom);
         Self {
@@ -282,6 +338,25 @@ impl DictionaryBump {
 
     pub fn used(&self) -> usize {
         (self.cur as usize) - (self.start as usize)
+    }
+}
+
+// === impl Entries ===
+
+impl<'dict, T: 'static> Iterator for Entries<'dict, T> {
+    type Item = &'dict DictionaryEntry<T>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let entry = self.next.take()?;
+        let entry = unsafe {
+            // Safety: `self.next` must be a pointer into the VM's dictionary
+            // entries. The caller who constructs a `Entries` iterator is
+            // responsible for ensuring this.
+            entry.as_ref()
+        };
+        self.next = entry.link;
+        Some(entry)
     }
 }
 
