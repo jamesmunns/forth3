@@ -3,7 +3,7 @@ use core::{
     num::NonZeroU16,
     ops::{Deref, Neg},
     ptr::NonNull,
-    str::FromStr, marker::PhantomData,
+    str::FromStr,
 };
 
 use crate::{
@@ -624,25 +624,10 @@ impl<T> Forth<T> {
             .ok_or(Error::ColonCompileMissingName)?;
         let value_i32 = value.parse::<i32>().replace_err(Error::BadLiteral)?;
 
-        let dict_base = self.dict.alloc.bump::<DictionaryEntry<T>>()?;
-        self.dict.alloc.bump_write(Word::data(value_i32))?;
-        unsafe {
-            dict_base.as_ptr().write(DictionaryEntry {
-                hdr: EntryHeader {
-                    name,
-                    kind: EntryKind::Dictionary,
-                    len: 1,
-                    _pd: PhantomData,
-                },
-                // TODO: Should we look up `(constant)` for consistency?
-                // Use `find_word`?
-                func: Self::constant,
-                // Don't link until we know we have a "good" entry!
-                link: self.dict.tail.take(),
-                parameter_field: [],
-            });
-        }
-        self.dict.tail = Some(dict_base);
+        self.dict.build_entry()?.write_word(Word::data(value_i32))?
+            // TODO: Should we look up `(constant)` for consistency?
+            // Use `find_word`?
+            .finish(name, Self::constant);
         Ok(0)
     }
 
@@ -654,26 +639,10 @@ impl<T> Forth<T> {
             .cur_word()
             .ok_or(Error::ColonCompileMissingName)?;
         let name = self.dict.alloc.bump_str(name)?;
-
-        let dict_base = self.dict.alloc.bump::<DictionaryEntry<T>>()?;
-        self.dict.alloc.bump_write(Word::data(0))?;
-        unsafe {
-            dict_base.as_ptr().write(DictionaryEntry {
-                hdr: EntryHeader {
-                    name,
-                    kind: EntryKind::Dictionary,
-                    len: 1,
-                    _pd: PhantomData,
-                },
-                // TODO: Should we look up `(variable)` for consistency?
-                // Use `find_word`?
-                func: Self::variable,
-                // Don't link until we know we have a "good" entry!
-                link: self.dict.tail.take(),
-                parameter_field: [],
-            });
-        }
-        self.dict.tail = Some(dict_base);
+        self.dict.build_entry()?.write_word(Word::data(0))?
+            // TODO: Should we look up `(variable)` for consistency?
+            // Use `find_word`?
+            .finish(name, Self::variable);
         Ok(0)
     }
 
@@ -695,32 +664,15 @@ impl<T> Forth<T> {
             .parse::<NonZeroU16>()
             .replace_err(Error::BadArrayLength)?;
 
-        let dict_base = self.dict.alloc.bump::<DictionaryEntry<T>>()?;
-
+        let mut entry = self.dict.build_entry()?;
         for _ in 0..u16::from(count_u16) {
-            self.dict.alloc.bump_write(Word::data(0))?;
+            entry = entry.write_word(Word::data(0))?;
         }
-
-        unsafe {
-            dict_base.as_ptr().write(DictionaryEntry {
-                hdr: EntryHeader {
-                    name,
-                    kind: EntryKind::Dictionary,
-                    len: count_u16.into(),
-                    _pd: PhantomData
-                },
-                // TODO: Should arrays push length and ptr? Or just ptr?
-                //
-                // TODO: Should we look up `(variable)` for consistency?
-                // Use `find_word`?
-                func: Self::variable,
-
-                // Don't link until we know we have a "good" entry!
-                link: self.dict.tail.take(),
-                parameter_field: [],
-            });
-        }
-        self.dict.tail = Some(dict_base);
+        // TODO: Should arrays push length and ptr? Or just ptr?
+        //
+        // TODO: Should we look up `(variable)` for consistency?
+        // Use `find_word`?
+        entry.finish(name, Self::variable);
         Ok(0)
     }
 }
