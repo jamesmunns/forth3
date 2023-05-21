@@ -132,7 +132,7 @@ impl<T: 'static> LBForth<T> {
         }
     }
 
-    pub fn new_child(&self, params: LBForthParams, host_ctxt: T) -> Self {
+    pub fn new_child(params: LBForthParams, host_ctxt: T, parent: &Forth<T>) -> Self {
         let _payload_dstack: LeakBox<Word> = LeakBox::new(params.data_stack_elems);
         let _payload_rstack: LeakBox<Word> = LeakBox::new(params.return_stack_elems);
         let _payload_cstack: LeakBox<CallContext<T>> = LeakBox::new(params.control_stack_elems);
@@ -143,7 +143,7 @@ impl<T: 'static> LBForth<T> {
         let input = WordStrBuf::new(_input_buf.ptr(), _input_buf.len());
         let output = OutputBuf::new(_output_buf.ptr(), _output_buf.len());
         let forth = unsafe {
-            self.forth.new_child(
+            parent.new_child(
                 (_payload_dstack.ptr(), _payload_dstack.len()),
                 (_payload_rstack.ptr(), _payload_rstack.len()),
                 (_payload_cstack.ptr(), _payload_cstack.len()),
@@ -214,8 +214,7 @@ where
         }
     }
 
-    pub fn new_child(&self, params: LBForthParams, host_ctxt: T) -> Self 
-    where D: Clone, {
+    pub fn new_child(params: LBForthParams, host_ctxt: T, parent: &Forth<T>, builtins: D) -> Self {
         let _payload_dstack: LeakBox<Word> = LeakBox::new(params.data_stack_elems);
         let _payload_rstack: LeakBox<Word> = LeakBox::new(params.return_stack_elems);
         let _payload_cstack: LeakBox<CallContext<T>> = LeakBox::new(params.control_stack_elems);
@@ -225,8 +224,9 @@ where
 
         let input = WordStrBuf::new(_input_buf.ptr(), _input_buf.len());
         let output = OutputBuf::new(_output_buf.ptr(), _output_buf.len());
-        let forth = unsafe {
-            self.forth.new_child(
+        let forth = {
+            let vm = unsafe {
+            parent.new_child(
                 (_payload_dstack.ptr(), _payload_dstack.len()),
                 (_payload_rstack.ptr(), _payload_rstack.len()),
                 (_payload_cstack.ptr(), _payload_cstack.len()),
@@ -234,9 +234,11 @@ where
                 input,
                 output,
                 host_ctxt,
-            )
-            .unwrap()
+            )}
+            .unwrap();
+            AsyncForth::<T, D> {vm, builtins }
         };
+
 
         Self {
             forth,

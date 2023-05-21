@@ -44,8 +44,8 @@ use super::*;
 /// [`async fn`]: https://doc.rust-lang.org/stable/std/keyword.async.html
 /// [`.await`]: https://doc.rust-lang.org/stable/std/keyword.await.html
 pub struct AsyncForth<T: 'static, A> {
-    vm: Forth<T>,
-    builtins: A,
+    pub(crate) vm: Forth<T>,
+    pub(crate) builtins: A,
 }
 
 impl<T, A> AsyncForth<T, A>
