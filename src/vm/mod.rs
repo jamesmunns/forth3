@@ -93,8 +93,52 @@ impl<T> Forth<T> {
         })
     }
 
+    /// Returns a new "child" Forth VM, which inherits all the bindings
+    /// currently present in this VM.
+    ///
+    /// The child VM's dictionary performs a deep copy of this VM's dictionary,
+    /// so any new bindings or rebindings in the child VM will not effect this
+    /// VM, and any changes to this VM's bindings after the child vm is created
+    /// will not effect this VM.
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error if the provdied `dict_buf` lacks sufficient capacity
+    ///   to hold all bindings in this VM.
+    pub unsafe fn new_child(
+        &self,
+        dstack_buf: (*mut Word, usize),
+        rstack_buf: (*mut Word, usize),
+        cstack_buf: (*mut CallContext<T>, usize),
+        dict_buf: (*mut u8, usize),
+        input: WordStrBuf,
+        output: OutputBuf,
+        host_ctxt: T,
+    ) -> Result<Self, Error> {
+        let data_stack = Stack::new(dstack_buf.0, dstack_buf.1);
+        let return_stack = Stack::new(rstack_buf.0, rstack_buf.1);
+        let call_stack = Stack::new(cstack_buf.0, cstack_buf.1);
+        let mut dict = Dictionary::new(dict_buf.0, dict_buf.1);
+        self.dict.deep_copy(&mut dict)?;
+
+        Ok(Self {
+            mode: Mode::Run,
+            data_stack,
+            return_stack,
+            call_stack,
+            dict,
+            input,
+            output,
+            host_ctxt,
+            builtins: self.builtins,
+
+            #[cfg(feature = "async")]
+            async_builtins: self.async_builtins,
+        })
+    }
+
     #[cfg(feature = "async")]
-     unsafe fn new_async(
+    unsafe fn new_async(
         dstack_buf: (*mut Word, usize),
         rstack_buf: (*mut Word, usize),
         cstack_buf: (*mut CallContext<T>, usize),

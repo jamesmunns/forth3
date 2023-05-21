@@ -68,6 +68,21 @@ where
         Ok(Self { vm, builtins: async_builtins })
     }
 
+    pub unsafe fn new_child(&self,
+        dstack_buf: (*mut Word, usize),
+        rstack_buf: (*mut Word, usize),
+        cstack_buf: (*mut CallContext<T>, usize),
+        dict_buf: (*mut u8, usize),
+        input: WordStrBuf,
+        output: OutputBuf,
+        host_ctxt: T,
+    ) -> Result<Self, Error>
+    where A: Clone,
+    {
+        let vm = self.vm.new_child(dstack_buf, rstack_buf, cstack_buf, dict_buf, input, output, host_ctxt)?;
+        Ok(Self { vm, builtins: self.builtins.clone() })
+    }
+
     pub fn output(&self) -> &OutputBuf {
         &self.vm.output
     }
