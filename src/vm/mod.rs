@@ -7,7 +7,7 @@ use core::{
 };
 
 use crate::{
-    dictionary::{
+    dictionary::{self,
         BuiltinEntry, BumpError, DictionaryEntry, EntryHeader, EntryKind,
         OwnedDict,
     },
@@ -93,6 +93,9 @@ impl<T> Forth<T> {
         })
     }
 
+    /// Pushes a task to the back of the local queue, skipping the LIFO
+    /// slot, and overflowing onto the injection queue if the local
+    /// queue is full.
     #[cfg(feature = "async")]
      unsafe fn new_async(
         dstack_buf: (*mut Word, usize),
@@ -190,8 +193,8 @@ impl<T> Forth<T> {
             .map(NonNull::from)
     }
 
-    fn find_in_dict(&self, fastr: &TmpFaStr<'_>) -> Option<NonNull<DictionaryEntry<T>>> {
-        self.dict.entries().find(|&de| &de.hdr.name == fastr.deref()).map(NonNull::from)
+    fn find_in_dict(&self, fastr: &TmpFaStr<'_>) -> Option<dictionary::Found<T>> {
+        self.dict.entries().find(|&de| &de.hdr.name == fastr.deref())
     }
 
     pub fn lookup(&self, word: &str) -> Result<Lookup<T>, Error> {
