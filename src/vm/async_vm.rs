@@ -57,14 +57,14 @@ where
         dstack_buf: (*mut Word, usize),
         rstack_buf: (*mut Word, usize),
         cstack_buf: (*mut CallContext<T>, usize),
-        dict_buf: (*mut u8, usize),
+        dict: OwnedDict<T>,
         input: WordStrBuf,
         output: OutputBuf,
         host_ctxt: T,
         sync_builtins: &'static [BuiltinEntry<T>],
         async_builtins: A,
     ) -> Result<Self, Error> {
-        let vm = Forth::new_async(dstack_buf, rstack_buf, cstack_buf, dict_buf, input, output, host_ctxt, sync_builtins, A::BUILTINS)?;
+        let vm = Forth::new_async(dstack_buf, rstack_buf, cstack_buf, dict, input, output, host_ctxt, sync_builtins, A::BUILTINS)?;
         Ok(Self { vm, builtins: async_builtins })
     }
 
