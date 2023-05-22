@@ -69,17 +69,50 @@ jobs:
       run: rustup show
     - uses: olix0r/cargo-action-fmt@ee1ef42932e44794821dab57ef1bf7a73df8b21f
     - uses: actions/checkout@v3
-    - name: run cargo check (debug)
-    # TODO(AJM): this only does the main crate
+    - name: run cargo check (main crate, debug)
       run: |
         cargo check \
           --all-features \
           --quiet \
           --message-format=json |
           cargo-action-fmt
-    - name: run cargo check (release)
+    - name: run cargo check (main crate, release)
       run: |
         cargo check \
+          --release \
+          --all-features \
+          --quiet \
+          --message-format=json |
+          cargo-action-fmt
+    - name: run cargo check (f3repl, debug)
+      run: |
+        cargo check \
+          --manifest-path=./f3repl/Cargo.toml \
+          --all-features \
+          --quiet \
+          --message-format=json |
+          cargo-action-fmt
+    - name: run cargo check (f3repl, release)
+      run: |
+        cargo check \
+          --manifest-path=./f3repl/Cargo.toml \
+          --release \
+          --all-features \
+          --quiet \
+          --message-format=json |
+          cargo-action-fmt
+    - name: run cargo check (forthboy, debug)
+      run: |
+        cargo check \
+          --manifest-path=./forthboy/Cargo.toml \
+          --all-features \
+          --quiet \
+          --message-format=json |
+          cargo-action-fmt
+    - name: run cargo check (forthboy, release)
+      run: |
+        cargo check \
+          --manifest-path=./forthboy/Cargo.toml \
           --release \
           --all-features \
           --quiet \
