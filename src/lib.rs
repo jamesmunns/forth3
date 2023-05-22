@@ -403,18 +403,16 @@ pub mod test {
     }
 
     #[test]
-    fn it_still_works_when_deepcopied() {
+    fn it_still_works_when_forked() {
         let mut lbforth1 = LBForth::from_params(
             LBForthParams::default(),
             TestContext::default(),
             Forth::<TestContext>::FULL_BUILTINS,
         );
 
-        let forth1 = &mut lbforth1.forth;
-
         // run all the tests on the first forth VM
         println!("\n --- testing first forth VM --- \n");
-        blocking_runtest_with(forth1, r#"
+        blocking_runtest_with(&mut lbforth1.forth, r#"
             > 2 3 + .
             < 5 ok.
             > : yay 2 3 + . ;
@@ -510,17 +508,13 @@ pub mod test {
 
         // create a new forth VM, and deep copy the first VM's dictionary into
         // the second.
-        let mut lbforth2 = LBForth::from_params(
+        let mut lbforth2 = lbforth1.fork_with_params(
             LBForthParams::default(),
             TestContext::default(),
-            Forth::<TestContext>::FULL_BUILTINS,
         );
 
-        let forth2 = &mut lbforth2.forth;
-        forth1.dict.deep_copy(&mut forth2.dict).expect("deep copy should work");
-
         println!("\n --- testing second forth VM --- \n");
-        blocking_runtest_with(forth2, r#"
+        blocking_runtest_with(&mut lbforth2.forth, r#"
             ( all the bindings in the old VM's dictionary should be present in the
               new VM, and, it shouldn't segfault... :D )
             > yay yay yay
@@ -593,7 +587,7 @@ pub mod test {
 
         // check that forth1's bindings aren't clobbered
         println!("\n --- retesting first VM's bindings --- \n");
-        blocking_runtest_with( forth1, r#"
+        blocking_runtest_with( &mut lbforth1.forth, r#"
             ( the existing `y` variable should have its second value from the
               first test. )
             > y @ .
@@ -602,16 +596,16 @@ pub mod test {
             < 100 ok.
         "#);
         // new words defined in forth2 don't exist in forth1
-        forth1.input.fill("star3").unwrap();
-        assert_eq!(forth1.process_line(), Err(Error::LookupFailed));
-        forth1.output.clear();
-        forth1.return_stack.clear();
+        lbforth1.forth.input.fill("star3").unwrap();
+        assert_eq!(lbforth1.forth.process_line(), Err(Error::LookupFailed));
+        lbforth1.forth.output.clear();
+        lbforth1.forth.return_stack.clear();
 
         // and neither do new variables.
-        forth1.input.fill("foo @ .").unwrap();
-        assert_eq!(forth1.process_line(), Err(Error::LookupFailed));
-        forth1.output.clear();
-        forth1.return_stack.clear();
+        lbforth1.forth.input.fill("foo @ .").unwrap();
+        assert_eq!(lbforth1.forth.process_line(), Err(Error::LookupFailed));
+        lbforth1.forth.output.clear();
+        lbforth1.forth.return_stack.clear();
     }
 
     struct CountingFut<'forth> {
