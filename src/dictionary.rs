@@ -1,11 +1,13 @@
 use crate::fastr::FaStr;
 use crate::{Word, WordFunc};
-use core::alloc::Layout;
-use core::marker::PhantomData;
-use core::ptr::addr_of_mut;
-use core::ptr::NonNull;
-use core::ops::Deref;
-use portable_atomic::{Ordering, AtomicUsize};
+use core::mem;
+use core::{
+    alloc::Layout,
+    marker::PhantomData,
+    ptr::{addr_of_mut, NonNull},
+    ops::{Deref, DerefMut}
+};
+use portable_atomic::{Ordering::*, AtomicUsize};
 
 #[derive(Debug, PartialEq)]
 pub enum BumpError {
@@ -75,13 +77,19 @@ pub struct Dictionary<T: 'static, D: DropDict> {
     /// When looking up a binding that isn't present in `self`, we traverse this
     /// chain of references. When dropping the dictionary, we decrement the
     /// parent's ref count.
-    parent: Option<DictRef<T, D>>,
+    parent: Option<SharedDict<T, D>>,
 }
 
-pub struct DictRef<T: 'static, D: DropDict>(NonNull<Dictionary<T, D>>);
+pub struct SharedDict<T: 'static, D: DropDict>(NonNull<Dictionary<T, D>>);
+
+pub struct OwnedDict<T: 'static, D: DropDict>(NonNull<Dictionary<T, D>>);
 
 pub trait DropDict {
     /// Deallocate a dictionary.
+    ///
+    // TODO(eliza): This does not require a `Layout`, because the dictionary
+    // knows its own size...maybe it should provide one anyway, to make things
+    // more convenient for the allocator?
     unsafe fn drop_dict<T>(dict: NonNull<Dictionary<T, Self>>);
 }
 
@@ -241,7 +249,7 @@ impl<T: 'static, D: DropDict> Dictionary<T, D> {
     }
 
     pub(crate) fn add_bi_fastr(&mut self, name: FaStr, bi: WordFunc<T>) -> Result<(), BumpError> {
-        debug_assert_eq!(self.refs.load(Ordering::Acquire), Self::MUTABLE);
+        debug_assert_eq!(self.refs.load(Acquire), Self::MUTABLE);
         // Allocate and initialize the dictionary entry
         let dict_base = self.alloc.bump::<DictionaryEntry<T>>()?;
         unsafe {
@@ -297,17 +305,9 @@ impl<T: 'static, D: DropDict> Dictionary<T, D> {
     }
 }
 
-impl<T: 'static, D: DropDict> Drop for Dictionary<T, D> {
-    fn drop(&mut self) {
-        unsafe {
-            D::drop_dict(NonNull::from(self))
-        }
-    }
-}
+// === SharedDict ===
 
-// === DictRef ===
-
-impl<T: 'static, D: DropDict> DictRef<T, D> {
+impl<T: 'static, D: DropDict> SharedDict<T, D> {
     const MAX_REFCOUNT: usize = Dictionary::<T, D>::MUTABLE - 1;
 
 
@@ -315,20 +315,19 @@ impl<T: 'static, D: DropDict> DictRef<T, D> {
     #[inline(never)]
     unsafe fn drop_slow(&mut self) {
         unsafe {
-            // Allow the data's destructor to run.
-            core::ptr::drop_in_place(self.0.as_mut())
+            D::drop_dict(self.0)
         }
     }
 }
 
-impl <T: 'static, D: DropDict> Deref for DictRef<T, D> {
+impl <T: 'static, D: DropDict> Deref for SharedDict<T, D> {
     type Target = Dictionary<T, D>;
     fn deref(&self) -> &Self::Target {
         unsafe { self.0.as_ref() }
     }
 }
 
-impl<T: 'static, D: DropDict> Clone for DictRef<T, D>{
+impl<T: 'static, D: DropDict> Clone for SharedDict<T, D>{
     #[inline]
     fn clone(&self) -> Self {
         // Using a relaxed ordering is alright here, as knowledge of the
@@ -342,10 +341,10 @@ impl<T: 'static, D: DropDict> Clone for DictRef<T, D>{
         // another must already provide any required synchronization.
         //
         // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
-        let old_size = self.refs.strong.fetch_add(1, Ordering::Relaxed);
+        let old_size = self.refs.strong.fetch_add(1, Relaxed);
 
         // However we need to guard against massive refcounts in case someone is `mem::forget`ing
-        // `DictRef`s. If we don't do this the count can overflow and users will use-after free. This
+        // `SharedDict`s. If we don't do this the count can overflow and users will use-after free. This
         // branch will never be taken in any realistic program. We abort because such a program is
         // incredibly degenerate, and we don't care to support it.
         //
@@ -363,13 +362,13 @@ impl<T: 'static, D: DropDict> Clone for DictRef<T, D>{
 }
 
 
-impl<T: 'static, D: DropDict> Drop for DictRef<T, D>{
+impl<T: 'static, D: DropDict> Drop for SharedDict<T, D>{
     #[inline]
     fn drop(&mut self) {
         // Because `fetch_sub` is already atomic, we do not need to synchronize
         // with other threads unless we are going to delete the object. This
         // same logic applies to the below `fetch_sub` to the `weak` count.
-        if self.refs.fetch_sub(1, Ordering::Release) != 1 {
+        if self.refs.fetch_sub(1, Release) != 1 {
             return;
         }
 
@@ -401,10 +400,56 @@ impl<T: 'static, D: DropDict> Drop for DictRef<T, D>{
         //
         // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
         // [2]: (https://github.com/rust-lang/rust/pull/41714)
-        portable_atomic::fence(Ordering::Acquire);
+        portable_atomic::fence(Acquire);
 
         unsafe {
             self.drop_slow();
+        }
+    }
+}
+
+// === OwnedDict ===
+
+impl<T: 'static, D: DropDict> OwnedDict<T, D> {
+    pub fn new(dict: NonNull<Dictionary<T, D>>) -> Self {
+        debug_assert_eq!(
+            unsafe { dict.as_ref().refs.load(Acquire) },
+            Dictionary::<T, D>::MUTABLE,
+        );
+        Self(dict)
+    }
+
+    pub fn into_shared(self) -> SharedDict<T, D> {
+        // don't let the destructor run, as it will deallocate the dictionary.
+        let this = mem::ManuallyDrop::new(self);
+        this.refs.compare_exchange(
+            Dictionary::<T, D>::MUTABLE,
+            1, AcqRel, Acquire
+        ).expect("dictionary must have been mutable");
+        SharedDict(this.0)
+    }
+}
+
+impl<T: 'static, D: DropDict> Deref for OwnedDict<T, D> {
+    type Target = Dictionary<T, D>;
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.0.as_ref() }
+    }
+}
+
+impl<T: 'static, D: DropDict> DerefMut for OwnedDict<T, D> {
+    fn deref_mut(&self) -> &Self::Target {
+        unsafe {
+            debug_assert_eq!(self.0.as_ref().refs.load(Acquire), Dictionary::<T, D>::MUTABLE);
+            self.0.as_mut()
+        }
+    }
+}
+
+impl<T: 'static, D: DropDict> Drop for OwnedDict<T, D> {
+    fn drop(&mut self) {
+        unsafe {
+            D::drop_dict(self.0)
         }
     }
 }
