@@ -123,6 +123,31 @@ impl<T> Forth<T> {
         })
     }
 
+    pub unsafe fn fork(
+        &mut self,
+        mut new_dict: OwnedDict<T>,
+        my_dict: OwnedDict<T>,
+        dstack_buf: (*mut Word, usize),
+        rstack_buf: (*mut Word, usize),
+        cstack_buf: (*mut CallContext<T>, usize),
+        input: WordStrBuf,
+        output: OutputBuf,
+        host_ctxt: T,
+    ) -> Result<Self, Error> {
+        let shared_dict = self.dict.fork_onto(my_dict);
+        new_dict.set_parent(shared_dict);
+        Self::new(
+            dstack_buf,
+            rstack_buf,
+            cstack_buf,
+            new_dict,
+            input,
+            output,
+            host_ctxt,
+            self.builtins,
+        )
+    }
+
     pub fn add_builtin_static_name(
         &mut self,
         name: &'static str,

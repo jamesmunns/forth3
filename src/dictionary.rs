@@ -72,9 +72,9 @@ struct DictionaryInner<T: 'static> {
     bytes: [MaybeUninit<u8>; 0],
 }
 
-pub struct SharedDict<T: 'static>(NonNull<Dictionary<T>>);
-
 pub struct OwnedDict<T: 'static>(NonNull<Dictionary<T>>);
+
+pub(crate) struct SharedDict<T: 'static>(NonNull<Dictionary<T>>);
 
 pub struct Dictionary<T: 'static> {
     pub(crate) tail: Option<NonNull<DictionaryEntry<T>>>,
@@ -449,7 +449,7 @@ impl<T: 'static> OwnedDict<T> {
         Self(dict.cast::<Dictionary<T>>())
     }
 
-    pub fn into_shared(self) -> SharedDict<T> {
+    fn into_shared(self) -> SharedDict<T> {
         // don't let the destructor run, as it will deallocate the dictionary.
         let this = mem::ManuallyDrop::new(self);
         this.refs.compare_exchange(
@@ -457,6 +457,17 @@ impl<T: 'static> OwnedDict<T> {
             1, AcqRel, Acquire
         ).expect("dictionary must have been mutable");
         SharedDict(this.0)
+    }
+
+    pub(crate) fn fork_onto(&mut self, new: OwnedDict<T>) -> SharedDict<T> {
+        let this = mem::replace(self, new).into_shared();
+        self.set_parent(this.clone());
+        this
+    }
+
+    pub(crate) fn set_parent(&mut self, parent: SharedDict<T>) {
+        let _prev = self.parent.replace(parent);
+        debug_assert!(_prev.is_none(), "parent dictionary shouldn't be clobbered!");
     }
 }
 
@@ -528,24 +539,29 @@ impl<'dict, T: 'static> Iterator for Entries<'dict, T> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let entry = self.next.take()?;
-        let entry = unsafe {
-            // Safety: `self.next` must be a pointer into the VM's dictionary
-            // entries. The caller who constructs a `Entries` iterator is
-            // responsible for ensuring this.
-            entry.as_ref()
-        };
-        match entry.link {
-            Some(next) => self.next = Some(next),
-            None => {
-                // traverse the parent link
-                if let Some(parent) = self.dict.dict().parent.clone() {
-                    self.next = parent.tail;
-                    self.dict = CurrDict::Parent(parent);
+        loop {
+            let entry = match self.next.take() {
+                Some(entry) => entry,
+                None => {
+                    // try to traverse the parent link
+                    if let Some(parent) = self.dict.dict().parent.clone() {
+                        self.next = parent.tail;
+                        self.dict = CurrDict::Parent(parent);
+                        continue;
+                    } else {
+                        return None;
+                    }
                 }
-            }
+            };
+            let entry = unsafe {
+                // Safety: `self.next` must be a pointer into the VM's dictionary
+                // entries. The caller who constructs a `Entries` iterator is
+                // responsible for ensuring this.
+                entry.as_ref()
+            };
+            self.next = entry.link;
+            return Some(entry);
         }
-        Some(entry)
     }
 }
 

@@ -290,29 +290,23 @@ pub mod test {
     }
 
     #[test]
-    fn it_still_works_when_deepcopied() {
+    fn it_still_works_when_forked() {
         let mut lbforth1 = LBForth::from_params(
             LBForthParams::default(),
             TestContext::default(),
             Forth::<TestContext>::FULL_BUILTINS,
         );
 
-        let forth1 = &mut lbforth1.forth;
-
         // run all the tests on the first forth VM
         println!("\n --- testing first forth VM --- \n");
-        test_lines("forth1", forth1, TEST_LINES);
+        test_lines("forth1", &mut lbforth1.forth, TEST_LINES);
 
         // create a new forth VM, and deep copy the first VM's dictionary into
         // the second.
-        let mut lbforth2 = LBForth::from_params(
+        let mut lbforth2 = lbforth1.fork_with_params(
             LBForthParams::default(),
             TestContext::default(),
-            Forth::<TestContext>::FULL_BUILTINS,
         );
-
-        let forth2 = &mut lbforth2.forth;
-        forth1.dict.deep_copy(&mut forth2.dict).expect("deep copy should work");
 
         let lines = &[
             // all the bindings in the old VM's dictionary should be present in the
@@ -353,27 +347,27 @@ pub mod test {
         ];
 
         println!("\n --- testing second forth VM --- \n");
-        test_lines("forth2", forth2, lines);
+        test_lines("forth2", &mut lbforth2.forth, lines);
 
         // check that forth1's bindings aren't clobbered
         println!("\n --- retesting first VM's bindings --- \n");
-        test_lines("forth1", forth1, &[
+        test_lines("forth1", &mut lbforth1.forth, &[
             // the existing `y` variable should have its second value from the
             // first test.
             ("y @ .", "10 ok.\n"),
             ("a @ .", "100 ok.\n"),
         ]);
         // new words defined in forth2 don't exist in forth1
-        forth1.input.fill("star3").unwrap();
-        assert_eq!(forth1.process_line(), Err(Error::LookupFailed));
-        forth1.output.clear();
-        forth1.return_stack.clear();
+        lbforth1.forth.input.fill("star3").unwrap();
+        assert_eq!(lbforth1.forth.process_line(), Err(Error::LookupFailed));
+        lbforth1.forth.output.clear();
+        lbforth1.forth.return_stack.clear();
 
         // and neither do new variables.
-        forth1.input.fill("foo @ .").unwrap();
-        assert_eq!(forth1.process_line(), Err(Error::LookupFailed));
-        forth1.output.clear();
-        forth1.return_stack.clear();
+        lbforth1.forth.input.fill("foo @ .").unwrap();
+        assert_eq!(lbforth1.forth.process_line(), Err(Error::LookupFailed));
+        lbforth1.forth.output.clear();
+        lbforth1.forth.return_stack.clear();
     }
 
     #[test]

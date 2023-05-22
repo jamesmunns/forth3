@@ -68,6 +68,23 @@ where
         Ok(Self { vm, builtins: async_builtins })
     }
 
+    pub unsafe fn fork(
+        &mut self,
+        mut new_dict: OwnedDict<T>,
+        my_dict: OwnedDict<T>,
+        dstack_buf: (*mut Word, usize),
+        rstack_buf: (*mut Word, usize),
+        cstack_buf: (*mut CallContext<T>, usize),
+        input: WordStrBuf,
+        output: OutputBuf,
+        host_ctxt: T,
+    ) -> Result<Self, Error>
+    where A: Clone,
+    {
+        let vm = self.vm.fork(new_dict, my_dict, dstack_buf, rstack_buf, cstack_buf, input, output, host_ctxt)?;
+        Ok(Self { vm, builtins: self.builtins.clone() })
+    }
+
     pub fn output(&self) -> &OutputBuf {
         &self.vm.output
     }
