@@ -34,8 +34,13 @@ impl<T> LeakBox<T> {
         self.ptr.cast()
     }
 
-    pub fn non_null(&self) -> NonNull<T> {
-        NonNull::new(self.ptr.cast::<T>()).unwrap()
+    pub fn as_non_null(&self) -> NonNull<T> {
+        #[cfg(debug_assertions)]
+        let res = NonNull::new(self.ptr.cast::<T>()).unwrap();
+        #[cfg(not(debug_assertions))]
+        let res = unsafe { NonNull::new_unchecked(self.ptr.cast::<T>()) };
+
+        res
     }
 
     pub fn len(&self) -> usize {

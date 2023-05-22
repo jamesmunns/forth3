@@ -78,6 +78,8 @@ pub enum Error {
     BadWordOffset,
     BadArrayLength,
     DivideByZero,
+    AddrOfMissingName,
+    AddrOfNotAWord,
 
     // Not *really* an error - but signals that a function should be called
     // again. At the moment, only used for internal interpreter functions.
@@ -288,6 +290,81 @@ pub mod test {
 
         let context = lbforth.forth.release();
         assert_eq!(&context.contents, &[6, 5, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    }
+
+    fn test_lines(name: &str, forth: &mut Forth<TestContext>, lines: &[(&str, &str)]) {
+        let pad = if name.is_empty() {
+            ""
+        } else {
+            ": "
+        };
+        for (line, out) in lines {
+            println!("{name}{pad}{line}");
+            forth.input.fill(line).unwrap();
+            forth.process_line().unwrap();
+            print!("{name}{pad}=> {}", forth.output.as_str());
+            assert_eq!(forth.output.as_str(), *out);
+            forth.output.clear();
+        }
+    }
+
+    // TODO: This test puns the heap-allocated cell into an array of bytes. This causes
+    // miri to complain that the write is without provenance, which, fair. We might want
+    // to look into some way of handling this particularly to be able to safely deal with
+    // ALLOT and other alloca-style bump allocations of variable-sized data.
+    #[cfg(not(miri))]
+    #[test]
+    fn ptr_math() {
+        let mut lbforth = LBForth::from_params(
+            LBForthParams::default(),
+            TestContext::default(),
+            Forth::<TestContext>::FULL_BUILTINS,
+        );
+
+        let forth = &mut lbforth.forth;
+
+        test_lines("", forth, &[
+            // declare a variable
+            ("variable ptrword", "ok.\n"),
+            // write an initial value `0x76543210` -> 1985229328
+            ("1985229328 ptrword !", "ok.\n"),
+            // Make sure it worked
+            ("ptrword @ .", "1985229328 ok.\n"),
+            // this assumes little endian lol sorry
+            (": reader 4 0 do ptrword i + b@ . loop ;", "ok.\n"),
+            // 0x10, 0x32, 0x54, 0x76
+            ("reader", "16 50 84 118 ok.\n"),
+            //                |------------| x = ptrword[i]
+            //                               |-| x += i
+            //                                   | -----------| ptrword[i] = x
+            (": writer 4 0 do i ptrword + b@ i + ptrword i + b! loop ;", "ok.\n"),
+            ("writer", "ok.\n"),
+            // 0x10, 0x33, 0x56, 0x79
+            ("reader", "16 51 86 121 ok.\n"),
+        ]);
+    }
+
+    #[test]
+    fn execute() {
+        let mut lbforth = LBForth::from_params(
+            LBForthParams::default(),
+            TestContext::default(),
+            Forth::<TestContext>::FULL_BUILTINS,
+        );
+
+        let forth = &mut lbforth.forth;
+
+        test_lines("", forth, &[
+            // define two words
+            (": hello .\" hello, world!\" ;", "ok.\n"),
+            (": goodbye .\" goodbye, world!\" ;", "ok.\n"),
+            // take their addresses
+            ("' goodbye", "ok.\n"),
+            ("' hello", "ok.\n"),
+            // and exec them!
+            ("execute", "hello, world!ok.\n"),
+            ("execute", "goodbye, world!ok.\n"),
+        ]);
     }
 
     struct CountingFut<'forth> {

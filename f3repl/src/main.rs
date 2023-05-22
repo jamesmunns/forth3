@@ -21,7 +21,7 @@ impl BorrowDiskMut for ReplContext {
 fn main() {
     let c1: LeakBox<u8> = LeakBox::new(512);
     let c2: LeakBox<u8> = LeakBox::new(512);
-    let caches = [c1.non_null(), c2.non_null()];
+    let caches = [c1.as_non_null(), c2.as_non_null()];
     let disk = Disk::new(caches, 512, BinDisk);
 
     let params = LBForthParams {

@@ -632,6 +632,8 @@ impl<T> Forth<T> {
         Ok(*len - start)
     }
 
+    /// Take the next token off of the input buffer as a name, and allocate a dictionary
+    /// entry for it. The entry has a starting length of zero items in the parameter field
     fn take_name_alloc_dict(&mut self, f: WordFunc<T>) -> Result<NonNull<DictionaryEntry<T>>, Error> {
         self.input.advance();
         let name = self
