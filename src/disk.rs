@@ -375,7 +375,7 @@ pub mod test {
         let fake = FakeDisk::default();
         let c1: LeakBox<u8> = LeakBox::new(512);
         let c2: LeakBox<u8> = LeakBox::new(512);
-        let caches = [c1.non_null(), c2.non_null()];
+        let caches = [c1.as_non_null(), c2.as_non_null()];
         let mut disk = Disk::new(caches, 512, fake);
         assert!(disk.driver().actions.is_empty());
 
@@ -383,85 +383,85 @@ pub mod test {
         assert_eq!(
             &core::mem::take(&mut disk.driver().actions),
             &[Action::ReadFrom {
-                dest: c2.non_null(),
+                dest: c2.as_non_null(),
                 idx: 123,
                 len: 512
             },]
         );
-        assert_eq!(buf_01, c2.non_null());
+        assert_eq!(buf_01, c2.as_non_null());
         disk.mark_dirty();
 
         let buf_02 = disk.block(124).unwrap();
         assert_eq!(
             &core::mem::take(&mut disk.driver().actions),
             &[Action::ReadFrom {
-                dest: c1.non_null(),
+                dest: c1.as_non_null(),
                 idx: 124,
                 len: 512
             },]
         );
-        assert_eq!(buf_02, c1.non_null());
+        assert_eq!(buf_02, c1.as_non_null());
 
         let buf_03 = disk.block(125).unwrap();
         assert_eq!(
             &core::mem::take(&mut disk.driver().actions),
             &[
                 Action::WriteTo {
-                    src: c2.non_null(),
+                    src: c2.as_non_null(),
                     idx: 123,
                     len: 512
                 },
                 Action::ReadFrom {
-                    dest: c2.non_null(),
+                    dest: c2.as_non_null(),
                     idx: 125,
                     len: 512
                 },
             ]
         );
-        assert_eq!(buf_03, c2.non_null());
+        assert_eq!(buf_03, c2.as_non_null());
 
         let buf_04 = disk.block(124).unwrap();
         assert_eq!(&core::mem::take(&mut disk.driver().actions), &[]);
-        assert_eq!(buf_04, c1.non_null());
+        assert_eq!(buf_04, c1.as_non_null());
         disk.mark_dirty();
 
         let buf_05 = disk.block(124).unwrap();
         assert_eq!(&core::mem::take(&mut disk.driver().actions), &[]);
-        assert_eq!(buf_05, c1.non_null());
+        assert_eq!(buf_05, c1.as_non_null());
         disk.mark_dirty();
 
         let buf_06 = disk.buffer(124).unwrap();
         assert_eq!(&core::mem::take(&mut disk.driver().actions), &[]);
-        assert_eq!(buf_06, c1.non_null());
+        assert_eq!(buf_06, c1.as_non_null());
         disk.mark_dirty();
 
         let buf_07 = disk.block(126).unwrap();
         assert_eq!(
             &core::mem::take(&mut disk.driver().actions),
             &[Action::ReadFrom {
-                dest: c2.non_null(),
+                dest: c2.as_non_null(),
                 idx: 126,
                 len: 512
             },]
         );
-        assert_eq!(buf_07, c2.non_null());
+        assert_eq!(buf_07, c2.as_non_null());
 
         let buf_08 = disk.block(127).unwrap();
         assert_eq!(
             &core::mem::take(&mut disk.driver().actions),
             &[
                 Action::WriteTo {
-                    src: c1.non_null(),
+                    src: c1.as_non_null(),
                     idx: 124,
                     len: 512
                 },
                 Action::ReadFrom {
-                    dest: c1.non_null(),
+                    dest: c1.as_non_null(),
                     idx: 127,
                     len: 512
                 },
             ]
         );
-        assert_eq!(buf_08, c1.non_null());
+        assert_eq!(buf_08, c1.as_non_null());
     }
 }
