@@ -123,7 +123,6 @@ jobs:
   #   - name: cargo clippy
   #     run: just clippy
 
-
   # run host tests
   test-host:
     runs-on: ubuntu-latest
@@ -134,8 +133,9 @@ jobs:
     - name: install rust toolchain
       run: rustup show
     - uses: actions/checkout@v3
-    - name: cargo test (all crates)
-      run: cargo test --workspace --all-features
+    # for now, only forth3 has tests (that we care about)
+    - name: cargo test (forth3)
+      run: cargo test --all-features
 
   # (just forth3) - run miri tests
   test-host-miri:
