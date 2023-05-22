@@ -35,7 +35,10 @@ impl<T> LeakBox<T> {
     }
 
     pub fn non_null(&self) -> NonNull<T> {
+        #[cfg(debug_assertions)]
         NonNull::new(self.ptr.cast::<T>()).unwrap()
+        #[cfg(not(debug_assertions))]
+        NonNull::new_unchecked(self.ptr.cast::<T>())
     }
 
     pub fn len(&self) -> usize {
