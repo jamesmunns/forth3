@@ -26,6 +26,12 @@ pub enum EntryKind {
     AsyncBuiltin,
 }
 
+pub enum Found<'entry, T: 'static> {
+    StaticBuiltins(&'entry DictionaryEntry<T>),
+    FrozenDict(&'entry DictionaryEntry<T>),
+    CurrentDict(&'entry DictionaryEntry<T>),
+}
+
 #[repr(C)]
 pub struct EntryHeader<T: 'static> {
     pub name: FaStr,
@@ -536,7 +542,7 @@ impl<T: > EntryBuilder<'_, T> {
 // === impl Entries ===
 
 impl<'dict, T: 'static> Iterator for Entries<'dict, T> {
-    type Item = &'dict DictionaryEntry<T>;
+    type Item = Found<'dict, T>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -561,7 +567,11 @@ impl<'dict, T: 'static> Iterator for Entries<'dict, T> {
                 entry.as_ref()
             };
             self.next = entry.link;
-            return Some(entry);
+            let found = match self.dict {
+                CurrDict::Leaf(Found::CurrentDict(entry)),
+                CurrDict::Parent(Found::FrozenDict(entry)),
+            };
+            return Some(found);
         }
     }
 }
