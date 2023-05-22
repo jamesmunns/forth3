@@ -25,4 +25,5 @@ members = [
     ".",
     "f3repl",
     "forthboy",
+    "ui-test",
 ]
