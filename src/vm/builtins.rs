@@ -9,7 +9,10 @@ use crate::{
 };
 
 #[cfg(feature = "floats")]
-pub mod floats;
+mod floats;
+
+#[cfg(feature = "bitops")]
+mod bitops;
 
 // NOTE: This macro exists because we can't have const constructors that include
 // "mut" items, which unfortunately covers things like `fn(&mut T)`. Use a macro
@@ -95,14 +98,20 @@ impl<T: 'static> Forth<T> {
         // Logic operations
         //
         builtin!("not", Self::invert),
-        // NOTE! This is `bitand`, not logical `and`! e.g. `&` not `&&`.
-        builtin!("and", Self::and),
         builtin!("=", Self::equal),
         builtin!(">", Self::greater),
         builtin!("<", Self::less),
         builtin!("0=", Self::zero_equal),
         builtin!("0>", Self::zero_greater),
         builtin!("0<", Self::zero_less),
+        //
+        // Bitwise operations
+        //
+        builtin_if_feature!("bitops", "&", Self::bitand),
+        builtin_if_feature!("bitops", "|", Self::bitor),
+        builtin_if_feature!("bitops", "^", Self::bitxor),
+        builtin_if_feature!("bitops", "<<", Self::bitshl),
+        builtin_if_feature!("bitops", ">>", Self::bitshr),
         //
         // Stack operations
         //
@@ -452,14 +461,6 @@ impl<T: 'static> Forth<T> {
         } else {
             Word::data(0)
         };
-        self.data_stack.push(val)?;
-        Ok(())
-    }
-
-    pub fn and(&mut self) -> Result<(), Error> {
-        let a = self.data_stack.try_pop()?;
-        let b = self.data_stack.try_pop()?;
-        let val = Word::data(unsafe { a.data & b.data });
         self.data_stack.push(val)?;
         Ok(())
     }

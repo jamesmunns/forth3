@@ -4,6 +4,7 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 pub mod dictionary;
+pub mod disk;
 pub mod fastr;
 pub mod input;
 pub mod output;
@@ -17,6 +18,7 @@ pub mod leakbox;
 use core::ptr::NonNull;
 
 use dictionary::{BuiltinEntry, EntryHeader, EntryKind};
+use disk::DiskError;
 
 #[cfg(feature = "async")]
 use dictionary::AsyncBuiltinEntry;
@@ -43,6 +45,7 @@ pub enum Error {
     Bump(BumpError),
     Output(OutputError),
     CFANotInDict(Word),
+    Disk(DiskError),
     WordNotInDict,
     ColonCompileMissingName,
     ColonCompileMissingSemicolon,

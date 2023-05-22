@@ -14,8 +14,8 @@ use embedded_graphics::{
 };
 use fancy::{Line, RingLine, Source};
 use forth3::{
-    leakbox::{LBForth, LBForthParams},
-    Forth,
+    leakbox::{LBForth, LBForthParams, LeakBox},
+    Forth, disk::{Disk, BinDisk},
 };
 use minifb::{Key, Scale, Window, WindowOptions};
 use profont::PROFONT_12_POINT;
@@ -24,7 +24,7 @@ use std::time::Duration;
 pub mod bricks;
 pub mod fancy;
 
-const CHARS_X: usize = 40;
+const CHARS_X: usize = 50;
 const CHARS_Y: usize = 16;
 
 // const DEFAULT_CHAR: u8 = b' ';
@@ -44,7 +44,7 @@ const DISP_DEFAULT: [u32; DISP_PIXELS_TTL] = [0; DISP_PIXELS_TTL];
 struct GloboChar {
     grid: crate::fancy::RingLine<CHARS_Y, { CHARS_X - 4 }>,
     dirty: bool,
-    lb_forth: LBForth<()>,
+    lb_forth: LBForth<Disk<BinDisk>>,
 }
 
 impl GloboChar {
@@ -453,14 +453,11 @@ impl GloboChar {
 
                     self.lb_forth.forth.input.fill(&input).unwrap();
                     self.lb_forth.forth.output.clear();
-                    println!("PREPROCESS...");
                     let out = match self.lb_forth.forth.process_line() {
                         Ok(_) => {
-                            println!("POSTOK...");
                             self.lb_forth.forth.output.as_str().to_string()
                         }
                         Err(e) => {
-                            println!("POSTERR...");
                             let mut o = format!("ERROR: {:?}\n", e);
                             o += "Unprocessed Tokens:\n";
                             while let Some(tok) = self.lb_forth.forth.input.cur_word() {
@@ -546,7 +543,6 @@ impl GloboChar {
             Key::Count => None,
         };
         if let Some(k) = draw {
-            println!("{}", core::str::from_utf8(&[k]).unwrap());
             self.grid.append_char(k).unwrap();
             self.dirty = true;
         }
@@ -566,6 +562,11 @@ impl Default for Display {
 }
 
 fn main() {
+    let c1: LeakBox<u8> = LeakBox::new(512);
+    let c2: LeakBox<u8> = LeakBox::new(512);
+    let caches = [c1.as_non_null(), c2.as_non_null()];
+    let disk = Disk::new(caches, 512, BinDisk);
+
     let mut disp = Display::default();
     let mut options = WindowOptions::default();
     options.scale = Scale::X4;
@@ -575,7 +576,11 @@ fn main() {
     let style = MonoTextStyle::new(&FONT, Rgb888::WHITE);
     let style_dark = MonoTextStyle::new(&FONT, Rgb888::BLACK);
 
-    let lb_forth = LBForth::from_params(LBForthParams::default(), (), Forth::FULL_BUILTINS);
+    let mut lb_forth = LBForth::from_params(LBForthParams::default(), disk, Forth::FULL_BUILTINS);
+
+    for (name, bif) in forth3::Forth::<Disk<BinDisk>>::DISK_BUILTINS {
+        lb_forth.forth.add_builtin_static_name(name, *bif).unwrap();
+    }
 
     let mut the_grid = GloboChar {
         grid: RingLine::new(),
@@ -583,6 +588,8 @@ fn main() {
         lb_forth,
     };
     let _ = the_grid.grid.brick.insert_ue_front();
+
+
 
     // let mut input_tick = Instant::now();
     // let mut input_idx = 0;

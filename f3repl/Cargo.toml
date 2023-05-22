@@ -9,4 +9,4 @@ edition = "2021"
 
 [dependencies.forth3]
 path = "../"
-features = ["use-std"]
+features = ["use-std", "floats", "bitops"]
