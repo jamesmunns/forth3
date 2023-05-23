@@ -16,7 +16,7 @@ pub mod leakbox;
 
 use core::ptr::NonNull;
 
-use dictionary::{BuiltinEntry, EntryHeader, EntryKind};
+use dictionary::{BuiltinEntry, EntryHeader, EntryKind, DictLocation};
 
 #[cfg(feature = "async")]
 use dictionary::AsyncBuiltinEntry;
@@ -204,9 +204,7 @@ impl<T: 'static> CallContext<T> {
 type WordFunc<T> = fn(&mut Forth<T>) -> Result<(), Error>;
 
 pub enum Lookup<T: 'static> {
-    Dict {
-        de: NonNull<DictionaryEntry<T>>,
-    },
+    Dict(DictLocation<NonNull<DictionaryEntry<T>>>),
     Literal {
         val: i32,
     },
