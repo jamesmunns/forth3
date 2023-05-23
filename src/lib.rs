@@ -343,9 +343,11 @@ pub mod test {
             ("123 foo !", "ok.\n"),
             ("foo @ .", "123 ok.\n"),
         ];
+        print_dict("forth1", &mut lbforth2.forth);
 
         println!("\n --- testing second forth VM --- \n");
         test_lines("forth2", &mut lbforth2.forth, lines);
+        print_dict("forth2", &mut lbforth2.forth);
 
         // check that forth1's bindings aren't clobbered
         println!("\n --- retesting first VM's bindings --- \n");
@@ -381,6 +383,8 @@ pub mod test {
             ("q @ .", "123 ok.\n"),
         ]);
 
+        print_dict("forth1", &mut lbforth1.forth);
+
         // the new changes should not effect forth2
         println!("\n --- retesting second VM's bindings --- \n");
         test_lines("forth2", &mut lbforth2.forth, &[
@@ -393,6 +397,15 @@ pub mod test {
         assert_eq!(lbforth2.forth.process_line(), Err(Error::LookupFailed));
         lbforth2.forth.output.clear();
         lbforth2.forth.return_stack.clear();
+
+        print_dict("forth2", &mut lbforth2.forth);
+    }
+
+    fn print_dict(name: &str, forth: &mut Forth<TestContext>) {
+        forth.input.fill("dict").unwrap();
+        forth.process_line().unwrap();
+        println!("{name} {}", forth.output.as_str());
+        forth.output.clear();
     }
 
     #[test]

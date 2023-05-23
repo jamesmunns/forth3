@@ -227,6 +227,14 @@ impl<T: 'static> Forth<T> {
         output.write_str("dictionary: ")?;
         for item in dict.entries() {
             output.write_str(item.header().name.as_str())?;
+            if let DictLocation::Parent(_) = item {
+                // indicate that this binding is inherited from a parent.
+                // XXX(eliza): i was initially gonna add "(inherited)" but that
+                // makes some of the tests overflow their output buffer, lol.
+                // idk if the output of the `dict` word is standardized, is this
+                // okay to do?
+                output.write_str("*")?;
+            }
             output.write_str(", ")?;
         }
         output.write_str("\n")?;
