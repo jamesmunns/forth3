@@ -26,10 +26,12 @@ pub enum EntryKind {
     AsyncBuiltin,
 }
 
-pub enum Found<'entry, T: 'static> {
-    StaticBuiltins(&'entry DictionaryEntry<T>),
-    FrozenDict(&'entry DictionaryEntry<T>),
-    CurrentDict(&'entry DictionaryEntry<T>),
+/// Where a dictionary entry was found
+pub enum DictLocation<T> {
+    /// The entry was found in the current (mutable) dictionary.
+    Parent(T),
+    /// The entry was found in a parent (frozen) dictionary.
+    Current(T),
 }
 
 #[repr(C)]
@@ -542,7 +544,7 @@ impl<T: > EntryBuilder<'_, T> {
 // === impl Entries ===
 
 impl<'dict, T: 'static> Iterator for Entries<'dict, T> {
-    type Item = Found<'dict, T>;
+    type Item = DictLocation<&'dict DictionaryEntry<T>>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -568,8 +570,8 @@ impl<'dict, T: 'static> Iterator for Entries<'dict, T> {
             };
             self.next = entry.link;
             let found = match self.dict {
-                CurrDict::Leaf(Found::CurrentDict(entry)),
-                CurrDict::Parent(Found::FrozenDict(entry)),
+                CurrDict::Leaf(_) => DictLocation::Current(entry),
+                CurrDict::Parent(_) => DictLocation::Parent(entry),
             };
             return Some(found);
         }
@@ -681,6 +683,22 @@ impl DictionaryBump {
 
     pub fn used(&self) -> usize {
         (self.cur as usize) - (self.start as usize)
+    }
+}
+
+impl<T: 'static> DictLocation<&'_ DictionaryEntry<T>> {
+    pub(crate) fn header(&self) -> &EntryHeader<T> {
+        match self {
+            Self::Current(entry) => &entry.hdr,
+            Self::Parent(entry) => &entry.hdr,
+        }
+    }
+
+    pub(crate) fn into_non_null(self) -> DictLocation<NonNull<DictionaryEntry<T>>> {
+        match self {
+            Self::Current(entry) => DictLocation::Current(NonNull::from(entry)),
+            Self::Parent(entry) => DictLocation::Parent(NonNull::from(entry)),
+        }
     }
 }
 

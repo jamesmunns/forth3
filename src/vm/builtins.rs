@@ -1,7 +1,7 @@
 use core::{fmt::Write, mem::size_of, ptr::NonNull, marker::PhantomData};
 
 use crate::{
-    dictionary::{BuiltinEntry, DictionaryEntry, EntryHeader, EntryKind},
+    dictionary::{BuiltinEntry, DictionaryEntry, EntryHeader, EntryKind, DictLocation},
     fastr::comptime_fastr,
     vm::TmpFaStr,
     word::Word,
@@ -228,7 +228,7 @@ impl<T: 'static> Forth<T> {
         let Self { output, dict, .. } = self;
         output.write_str("dictionary: ")?;
         for item in dict.entries() {
-            output.write_str(item.hdr.name.as_str())?;
+            output.write_str(item.header().name.as_str())?;
             output.write_str(", ")?;
         }
         output.write_str("\n")?;
@@ -333,23 +333,37 @@ impl<T: 'static> Forth<T> {
             Some(d) => d,
         };
 
-        // NOTE: We use the *name* pointer for rewinding, as we allocate the name before the item.
-        let name_ptr = unsafe { defn.as_ref().hdr.name.as_ptr().cast_mut() };
-        self.dict.tail = unsafe { defn.as_ref().link };
-        let addr = defn.as_ptr();
-        let name_contains = self.dict.alloc.contains(name_ptr.cast());
-        let contains = self.dict.alloc.contains(addr.cast());
-        let ordered = (addr as usize) <= (self.dict.alloc.cur as usize);
+        match defn {
+            // The definition is in the current (mutable) dictionary. We can
+            // forget it by zeroing out the entry in the current dictionary.
+            DictLocation::Current(defn) => {
+                // NOTE: We use the *name* pointer for rewinding, as we allocate the name before the item.
+                let name_ptr = unsafe { defn.as_ref().hdr.name.as_ptr().cast_mut() };
+                self.dict.tail = unsafe { defn.as_ref().link };
+                let addr = defn.as_ptr();
+                let name_contains = self.dict.alloc.contains(name_ptr.cast());
+                let contains = self.dict.alloc.contains(addr.cast());
+                let ordered = (addr as usize) <= (self.dict.alloc.cur as usize);
 
-        if !(name_contains && contains && ordered) {
-            return Err(Error::InternalError);
+                if !(name_contains && contains && ordered) {
+                    return Err(Error::InternalError);
+                }
+
+                let len = (self.dict.alloc.cur as usize) - (name_ptr as usize);
+                unsafe {
+                    name_ptr.write_bytes(0x00, len);
+                }
+                self.dict.alloc.cur = name_ptr;
+            },
+            // The definition is in a parent (frozen) dictionary. We can't
+            // mutate that dictionary, so we must create a new entry in the
+            // current dict saying that the definition is forgotten.
+            // XXX(eliza): or this could be a runtime error? IDK...
+            DictLocation::Parent(de) => {
+                todo!("eliza: forget parent definitions");
+            }
         }
 
-        let len = (self.dict.alloc.cur as usize) - (name_ptr as usize);
-        unsafe {
-            name_ptr.write_bytes(0x00, len);
-        }
-        self.dict.alloc.cur = name_ptr;
         Ok(())
     }
 
@@ -847,7 +861,13 @@ impl<T: 'static> Forth<T> {
             .cur_word()
             .ok_or(Error::AddrOfMissingName)?;
         match self.lookup(name)? {
-            Lookup::Dict { de }=>
+            // The definition is in the current dictionary --- just push it.
+            Lookup::Dict(DictLocation::Current(de)) =>
+                self.data_stack.push(Word::ptr(de.as_ptr()))?,
+
+            // The definition is in the parent (frozen) dictionary.
+            // TODO(eliza): what should we do here?
+            Lookup::Dict(DictLocation::Parent(de)) =>
                 self.data_stack.push(Word::ptr(de.as_ptr()))?,
 
             Lookup::Builtin { bi } =>

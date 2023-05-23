@@ -1,5 +1,5 @@
 use core::{
-    mem::{self, size_of},
+    mem::size_of,
     num::NonZeroU16,
     ops::{Deref, Neg},
     ptr::NonNull,
@@ -7,9 +7,9 @@ use core::{
 };
 
 use crate::{
-    dictionary::{self,
-        BuiltinEntry, BumpError, DictionaryEntry, EntryHeader, EntryKind,
-        OwnedDict,
+    dictionary::{
+        DictLocation, BuiltinEntry, BumpError, DictionaryEntry, EntryHeader,
+        EntryKind, OwnedDict,
     },
     fastr::{FaStr, TmpFaStr},
     input::WordStrBuf,
@@ -169,7 +169,10 @@ impl<T> Forth<T> {
     fn find_word(&self, word: &str) -> Option<NonNull<EntryHeader<T>>> {
         let fastr = TmpFaStr::new_from(word);
         self.find_in_dict(&fastr)
-            .map(NonNull::cast)
+            .map(|entry| match entry {
+                DictLocation::Current(entry) => entry.cast(),
+                DictLocation::Parent(entry) => entry.cast(),
+            })
             .or_else(|| self.find_in_bis(&fastr).map(NonNull::cast))
     }
 
@@ -188,8 +191,10 @@ impl<T> Forth<T> {
             .map(NonNull::from)
     }
 
-    fn find_in_dict(&self, fastr: &TmpFaStr<'_>) -> Option<dictionary::Found<T>> {
-        self.dict.entries().find(|&de| &de.hdr.name == fastr.deref())
+    fn find_in_dict(&self, fastr: &TmpFaStr<'_>) -> Option<DictLocation<NonNull<DictionaryEntry<T>>>> {
+        self.dict.entries()
+            .find(|de| &(de.header().name) == fastr.deref())
+            .map(DictLocation::into_non_null)
     }
 
     pub fn lookup(&self, word: &str) -> Result<Lookup<T>, Error> {
@@ -208,7 +213,7 @@ impl<T> Forth<T> {
             _ => {
                 let fastr = TmpFaStr::new_from(word);
                 if let Some(entry) = self.find_in_dict(&fastr) {
-                    return Ok(Lookup::Dict { de: entry });
+                    return Ok(Lookup::Dict(entry));
                 }
                 if let Some(bis) = self.find_in_bis(&fastr) {
                     return Ok(Lookup::Builtin { bi: bis });
@@ -269,7 +274,7 @@ impl<T> Forth<T> {
         };
 
         match self.lookup(word)? {
-            Lookup::Dict { de } => {
+            Lookup::Dict(DictLocation::Current(de)) | Lookup::Dict(DictLocation::Parent(de)) => {
                 let dref = unsafe { de.as_ref() };
                 self.call_stack.push(CallContext {
                     eh: de.cast(),
@@ -527,7 +532,7 @@ impl<T> Forth<T> {
             Lookup::Else => return Err(Error::ElseBeforeIf),
             Lookup::Then => return Err(Error::ThenBeforeIf),
             Lookup::Semicolon => return Ok(0),
-            Lookup::Dict { de } => {
+            Lookup::Dict(DictLocation::Current(de)) | Lookup::Dict(DictLocation::Parent(de)) => {
                 // Dictionary items are put into the CFA array directly as
                 // a pointer to the dictionary entry
                 self.dict.alloc.bump_write(Word::ptr(de.as_ptr()))?;
