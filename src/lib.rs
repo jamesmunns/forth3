@@ -585,7 +585,7 @@ pub mod test {
 
         // check that forth1's bindings aren't clobbered
         println!("\n --- retesting first VM's bindings --- \n");
-        blocking_runtest_with( &mut lbforth1.forth, r#"
+        blocking_runtest_with(&mut lbforth1.forth, r#"
             ( the existing `y` variable should have its second value from the
               first test. )
             > y @ .
@@ -604,6 +604,46 @@ pub mod test {
         assert_eq!(lbforth1.forth.process_line(), Err(Error::LookupFailed));
         lbforth1.forth.output.clear();
         lbforth1.forth.return_stack.clear();
+
+        // have forth1 change some of its bindings
+        blocking_runtest_with(&mut lbforth1.forth, r#"
+            ( change the value of `y` )
+            > 666 y !
+            < ok.
+            > y @ .
+            < 666 ok.
+
+            (redefine `beep` )
+            > : beep ." goodbye, world!" ;
+            < ok.
+            > beep
+            < goodbye, world!ok.
+
+            ( define a new var )
+            > variable q
+            < ok.
+            > q @ .
+            < 0 ok.
+            > 123 q !
+            < ok.
+            > q @ .
+            < 123 ok.
+        "#);
+
+        // the new changes should not effect forth2
+        println!("\n --- retesting second VM's bindings --- \n");
+        blocking_runtest_with(&mut lbforth2.forth, r#"
+            > y @ .
+            < 100 ok.
+            > beep
+            < hello, world!ok.
+        "#);
+
+        // and neither do new variables.
+        lbforth2.forth.input.fill("q @ .").unwrap();
+        assert_eq!(lbforth2.forth.process_line(), Err(Error::LookupFailed));
+        lbforth2.forth.output.clear();
+        lbforth2.forth.return_stack.clear();
     }
 
     struct CountingFut<'forth> {
