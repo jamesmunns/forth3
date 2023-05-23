@@ -301,7 +301,21 @@ impl<T> Forth<T> {
                     builder = builder.write_word(*word)?;
                 }
                 // XXX(eliza): I *think* this is safe? FaStrs are immutable, right?
-                let name = dref.hdr.name.clone();
+                let name = unsafe {
+                    // safety: a `FaStr` points to a string region stored in a
+                    // dictionary. we can alias the name because our dictionary
+                    // holds a reference to the parent dictionary, keeping it
+                    // alive as long as our dictionary exists, and the new
+                    // pointer will be in a value in our dictionary.
+                    //
+                    // IF IT WAS POSSIBLE FOR PARENTS TO BE DROPPED WHILE THEIR
+                    // FORKS EXIST, THIS WOULD BE A DANGLING POINTER. IF YOU
+                    // EVER CHANGE THE PARENT REFERENCE COUNTING RULES TO ALLOW
+                    // PARENTS TO BE DEALLOCATED WHILE A CHILD EXISTS, YOU MUST
+                    // CHANGE THIS TO DEEP COPY THE `FaStr` INTO THE CHILD
+                    // DICT'S ARENA.
+                    dref.hdr.name.copy_in_child()
+                };
                 let entry = builder.kind(dref.hdr.kind).finish(name, dref.func);
                 self.call_stack.push(CallContext {
                     eh: entry.cast(),
