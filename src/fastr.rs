@@ -25,6 +25,7 @@ impl<'a> TmpFaStr<'a> {
     }
 }
 
+#[derive(Clone)]
 pub struct FaStr {
     ptr: *const u8,
     len_hash: LenHash,
@@ -72,6 +73,7 @@ impl PartialEq for FaStr {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct LenHash {
     // 29..32: 3-bit bitfield
     // 24..29: 5-bit len (0..31)
