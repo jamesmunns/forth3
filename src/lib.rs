@@ -503,6 +503,7 @@ pub mod test {
             < 0 0 0 0 ok.
             "#
         );
+        print_dict("forth1", &mut lbforth1.forth);
 
         // create a new forth VM, and deep copy the first VM's dictionary into
         // the second.
@@ -582,6 +583,7 @@ pub mod test {
             > foo @ .
             < 123 ok.
         "#);
+        print_dict("forth2", &mut lbforth2.forth);
 
         // check that forth1's bindings aren't clobbered
         println!("\n --- retesting first VM's bindings --- \n");
@@ -630,6 +632,8 @@ pub mod test {
             < 123 ok.
         "#);
 
+        print_dict("forth1", &mut lbforth1.forth);
+
         // the new changes should not effect forth2
         println!("\n --- retesting second VM's bindings --- \n");
         blocking_runtest_with(&mut lbforth2.forth, r#"
@@ -644,6 +648,15 @@ pub mod test {
         assert_eq!(lbforth2.forth.process_line(), Err(Error::LookupFailed));
         lbforth2.forth.output.clear();
         lbforth2.forth.return_stack.clear();
+
+        print_dict("forth2", &mut lbforth2.forth);
+    }
+
+    fn print_dict(name: &str, forth: &mut Forth<TestContext>) {
+        forth.input.fill("dict").unwrap();
+        forth.process_line().unwrap();
+        println!("{name} {}", forth.output.as_str());
+        forth.output.clear();
     }
 
     struct CountingFut<'forth> {
