@@ -355,6 +355,7 @@ pub mod test {
             ("y @ .", "10 ok.\n"),
             ("a @ .", "100 ok.\n"),
         ]);
+
         // new words defined in forth2 don't exist in forth1
         lbforth1.forth.input.fill("star3").unwrap();
         assert_eq!(lbforth1.forth.process_line(), Err(Error::LookupFailed));
@@ -366,6 +367,32 @@ pub mod test {
         assert_eq!(lbforth1.forth.process_line(), Err(Error::LookupFailed));
         lbforth1.forth.output.clear();
         lbforth1.forth.return_stack.clear();
+
+        // have forth1 change some of its bindings
+        test_lines("forth1", &mut lbforth1.forth, &[
+            ("666 y !", "ok.\n"),
+            ("y @ .", "666 ok.\n"),
+            (": beep .\" goodbye, world!\" ;", "ok.\n"),
+            ("beep", "goodbye, world!ok.\n"),
+            // define a new var
+            ("variable q", "ok.\n"),
+            ("q @ .", "0 ok.\n"),
+            ("123 q !", "ok.\n"),
+            ("q @ .", "123 ok.\n"),
+        ]);
+
+        // the new changes should not effect forth2
+        println!("\n --- retesting second VM's bindings --- \n");
+        test_lines("forth2", &mut lbforth2.forth, &[
+            ("y @ .", "100 ok.\n"),
+            ("beep", "hello, world!ok.\n"),
+        ]);
+
+        // and neither do new variables.
+        lbforth2.forth.input.fill("q @ .").unwrap();
+        assert_eq!(lbforth2.forth.process_line(), Err(Error::LookupFailed));
+        lbforth2.forth.output.clear();
+        lbforth2.forth.return_stack.clear();
     }
 
     #[test]
