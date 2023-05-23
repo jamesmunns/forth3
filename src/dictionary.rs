@@ -298,24 +298,6 @@ impl<T: 'static> Dictionary<T> {
             dict: CurrDict::Leaf(self),
         }
     }
-
-    /// Performs a deep copy of all entries in `self` into `other`.
-    ///
-    /// This is an *O*(*entries*) operation, as it traverses all entries in
-    /// `self` and constructs new entries in `other` with the same data. This
-    /// means that all pointers in the `other` dictionary should point into
-    /// `other`'s bump arena, rather than `self`'s. Changes to bindings in
-    /// `self` after a deep copy is performed will not effect bindings in
-    /// `other`, and changes to bindings in `other` will not effect the existing
-    /// bindings in `self`.
-    ///
-    /// # Errors
-    ///
-    /// This method returns an error if `other`'s bump arena lacks sufficient
-    /// capacity to store all the entries in `self`.
-    pub(crate) fn deep_copy(&self, _: &mut Self) -> Result<(), BumpError> {
-        panic!("eliza: bad, get rid of this")
-    }
 }
 
 impl<T: 'static> Drop for DictionaryInner<T> {
@@ -512,11 +494,11 @@ impl<T: > EntryBuilder<'_, T> {
         Ok(self)
     }
 
-    fn kind(self, kind: EntryKind) -> Self {
+    pub(crate) fn kind(self, kind: EntryKind) -> Self {
         Self { kind, ..self }
     }
 
-    pub(crate) fn finish(self, name: FaStr, func: WordFunc<T>) {
+    pub(crate) fn finish(self, name: FaStr, func: WordFunc<T>) -> NonNull<DictionaryEntry<T>> {
         unsafe {
             self.base.as_ptr().write(DictionaryEntry {
                 hdr: EntryHeader {
@@ -537,6 +519,7 @@ impl<T: > EntryBuilder<'_, T> {
             });
         }
         self.dict.tail = Some(self.base);
+        self.base
     }
 }
 

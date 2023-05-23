@@ -279,10 +279,32 @@ impl<T> Forth<T> {
         };
 
         match self.lookup(word)? {
-            Lookup::Dict(DictLocation::Current(de)) | Lookup::Dict(DictLocation::Parent(de)) => {
+            // Found in the current dictionary, so call it.
+            Lookup::Dict(DictLocation::Current(de)) => {
                 let dref = unsafe { de.as_ref() };
                 self.call_stack.push(CallContext {
                     eh: de.cast(),
+                    idx: 0,
+                    len: dref.hdr.len,
+                })?;
+
+                return Ok(ProcessAction::Execute);
+            }
+            // Found in a parent (frozen) dictionary. If this is a variable, we
+            // may mutate it, so it must be copied into our dictionary.
+            // TODO(eliza): we probably only need to do this when it's a
+            // variable lookup?
+            Lookup::Dict(DictLocation::Parent(de)) => {
+                let dref = unsafe { de.as_ref() };
+                let mut builder = self.dict.build_entry()?;
+                for word in dref.parameters() {
+                    builder = builder.write_word(*word)?;
+                }
+                // XXX(eliza): I *think* this is safe? FaStrs are immutable, right?
+                let name = dref.hdr.name.clone();
+                let entry = builder.kind(dref.hdr.kind).finish(name, dref.func);
+                self.call_stack.push(CallContext {
+                    eh: entry.cast(),
                     idx: 0,
                     len: dref.hdr.len,
                 })?;

@@ -389,7 +389,7 @@ pub mod test {
             ("execute", "goodbye, world!ok.\n"),
         ]);
     }
-      
+
     fn test_lines(name: &str, forth: &mut Forth<TestContext>, lines: &[(&str, &str)]) {
         let pad = if name.is_empty() {
             ""
