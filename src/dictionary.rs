@@ -74,12 +74,6 @@ pub struct DictionaryEntry<T: 'static> {
     pub(crate) parameter_field: [Word; 0],
 }
 
-#[repr(C)]
-struct DictionaryInner<T: 'static> {
-    pub(crate) header: Dictionary<T>,
-    bytes: [MaybeUninit<u8>; 0],
-}
-
 pub struct OwnedDict<T: 'static>(NonNull<Dictionary<T>>);
 
 pub(crate) struct SharedDict<T: 'static>(NonNull<Dictionary<T>>);
@@ -300,21 +294,6 @@ impl<T: 'static> Dictionary<T> {
     }
 }
 
-impl<T: 'static> Drop for DictionaryInner<T> {
-    fn drop(&mut self) {
-        let layout = Dictionary::<T>::layout(self.header.alloc.capacity())
-            .expect("if this dictionary was previously allocated, its layout must be valid...");
-        let deallocate = self.header.deallocate;
-        unsafe {
-            // drop the header, potentially running the destructor on the parent
-            // link, if one exists.
-            ptr::drop_in_place((&mut self.header) as *mut _);
-            deallocate(NonNull::from(self).cast(), layout);
-        }
-
-    }
-}
-
 // === SharedDict ===
 
 impl<T: 'static> SharedDict<T> {
@@ -421,6 +400,14 @@ impl<T: 'static> Drop for SharedDict<T>{
 
 impl<T: 'static> OwnedDict<T> {
     pub fn new<D: DropDict>(dict: NonNull<MaybeUninit<Dictionary<T>>>, size: usize) -> Self {
+
+        // A helper type to provide proper layout generation for initialization
+        #[repr(C)]
+        struct DictionaryInner<T: 'static> {
+            pub(crate) header: Dictionary<T>,
+            bytes: [MaybeUninit<u8>; 0],
+        }
+
         let ptr = dict.as_ptr().cast::<DictionaryInner<T>>();
         unsafe {
             let bump_base = addr_of_mut!((*ptr).bytes)
@@ -480,7 +467,10 @@ impl<T: 'static> DerefMut for OwnedDict<T> {
 impl<T: 'static> Drop for OwnedDict<T> {
     fn drop(&mut self) {
         unsafe {
-            ptr::drop_in_place(self.0.as_ptr())
+            let dealloc = self.deallocate;
+            let layout = Dictionary::<T>::layout(self.alloc.capacity()).unwrap();
+            ptr::drop_in_place(self.0.as_ptr());
+            (dealloc)(self.0.cast(), layout);
         }
     }
 }
@@ -686,19 +676,19 @@ impl<T: 'static> DictLocation<&'_ DictionaryEntry<T>> {
 
 #[cfg(test)]
 pub mod test {
-    use core::mem::size_of;
+    use core::{mem::size_of, sync::atomic::Ordering};
     use std::alloc::Layout;
 
     use crate::{
         dictionary::{DictionaryBump, DictionaryEntry, BuiltinEntry},
-        leakbox::LeakBox,
+        leakbox::{LeakBox, alloc_dict, LeakBoxDict},
         Word,
     };
 
     #[cfg(feature = "async")]
     use super::AsyncBuiltinEntry;
 
-    use super::EntryHeader;
+    use super::{EntryHeader, OwnedDict};
 
     #[test]
     fn sizes() {
@@ -730,5 +720,12 @@ pub mod test {
             let w = bump.bump::<Word>().unwrap();
             assert_eq!(w.as_ptr().align_offset(walign), 0);
         }
+    }
+
+    #[test]
+    fn just_one_dict() {
+
+        let buf: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(512);
+        assert_eq!(buf.refs.load(Ordering::Relaxed), usize::MAX);
     }
 }
