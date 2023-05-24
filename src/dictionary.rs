@@ -239,11 +239,6 @@ impl<T: 'static> DictionaryEntry<T> {
         let pfp: *mut [Word; 0] = addr_of_mut!((*ptr).parameter_field);
         NonNull::new_unchecked(pfp.cast::<Word>())
     }
-
-    pub fn parameters(&self) -> &[Word] {
-        let pfp = self.parameter_field.as_ptr();
-        unsafe { core::slice::from_raw_parts(pfp, self.hdr.len as usize) }
-    }
 }
 
 impl<T: 'static> Dictionary<T> {

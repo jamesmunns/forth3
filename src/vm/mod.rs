@@ -291,8 +291,12 @@ impl<T> Forth<T> {
             Lookup::Dict(DictLocation::Parent(de)) => {
                 let dref = unsafe { de.as_ref() };
                 let mut builder = self.dict.build_entry()?;
-                for word in dref.parameters() {
-                    builder = builder.write_word(*word)?;
+                unsafe {
+                    let mut p = DictionaryEntry::pfa(de).as_ptr();
+                    for _ in 0..dref.hdr.len {
+                        builder = builder.write_word(p.read())?;
+                        p = p.offset(1);
+                    }
                 }
                 // XXX(eliza): I *think* this is safe? FaStrs are immutable, right?
                 let name = unsafe {
