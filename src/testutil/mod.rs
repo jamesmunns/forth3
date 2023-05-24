@@ -53,45 +53,16 @@
 //! # "#)
 //! ```
 
-use crate::{leakbox::{LBForthParams, LBForth}, Forth};
+use crate::{leakbox::{LBForthParams, LBForth}, Forth, Error};
 
-// Runs the given steps against the given forth VM.
-//
-// Panics on any mismatch
-fn blocking_steps_with<T>(steps: &[Step], forth: &mut LBForth<T>) {
-    for Step { input, output } in steps.into_iter() {
-        forth.forth.input.fill(&input).unwrap();
-        let res = forth.forth.process_line();
-        match (res, output) {
-            (Ok(()), Outcome::OkAnyOutput) => {}
-            (Ok(()), Outcome::OkWithOutput(exp)) => {
-                let act_lines = forth.forth.output.as_str().lines().collect::<Vec<&str>>();
-                assert_eq!(act_lines.len(), exp.len());
-                act_lines.iter().zip(exp.iter()).for_each(|(a, e)| {
-                    assert_eq!(a.trim_end(), e.trim_end());
-                })
-            }
-            (Err(_e), Outcome::FatalError) => {}
-            (res, exp) => {
-                eprintln!("Error!");
-                eprintln!("Expected: {exp:?}");
-                eprintln!("Got: {res:?}");
-                if res.is_ok() {
-                    eprintln!("Output:\n{}", forth.forth.output.as_str());
-                }
-                panic!();
-            }
-        }
-        forth.forth.output.clear();
-    }
-}
-
-/// Run the given forth ui-test against the given forth vm.
+/// Run the given forth ui test against ALL enabled forth VMs
 ///
-/// Does not accept ui-tests with frontmatter configuration (will panic)
-pub fn blocking_runtest_with<T>(contents: &str, forth: &mut LBForth<T>) {
-    let tokd = tokenize(contents, false).unwrap();
-    blocking_steps_with(tokd.steps.as_slice(), forth);
+/// A helper for calling blocking + async runtest functions. This is a good
+/// default to use for unit tests.
+pub fn all_runtest(contents: &str) {
+    blocking_runtest(contents);
+    #[cfg(feature = "async")]
+    async_blockon_runtest(contents);
 }
 
 /// Run the given forth ui test against the default forth vm
@@ -101,7 +72,108 @@ pub fn blocking_runtest_with<T>(contents: &str, forth: &mut LBForth<T>) {
 pub fn blocking_runtest(contents: &str) {
     let tokd = tokenize(contents, true).unwrap();
     let mut forth = LBForth::from_params(tokd.settings, (), Forth::FULL_BUILTINS);
-    blocking_steps_with(tokd.steps.as_slice(), &mut forth);
+    blocking_steps_with(tokd.steps.as_slice(), &mut forth.forth);
+}
+
+/// Run the given forth ui-test against the given forth vm.
+///
+/// Does not accept ui-tests with frontmatter configuration (will panic)
+pub fn blocking_runtest_with<T>(contents: &str, forth: &mut Forth<T>) {
+    let tokd = tokenize(contents, false).unwrap();
+    blocking_steps_with(tokd.steps.as_slice(), forth);
+}
+
+/// Run the given forth ui test against the async forth vm
+///
+/// Does accept any/all/none of the following configuration frontmatter (see above
+/// for listing of frontmatter kinds). Provides no actual async builtins, and will
+/// panic if the provided dispatcher is called for some reason
+#[cfg(feature = "async")]
+pub fn async_blockon_runtest(contents: &str)
+{
+    use crate::{leakbox::AsyncLBForth, dictionary::{AsyncBuiltinEntry, AsyncBuiltins}, fastr::FaStr};
+
+    struct TestAsyncDispatcher;
+    impl<'forth> AsyncBuiltins<'forth, ()> for TestAsyncDispatcher {
+        type Future = futures::future::Ready<Result<(), Error>>;
+        const BUILTINS: &'static [AsyncBuiltinEntry<()>] = &[];
+        fn dispatch_async(
+            &self,
+            _id: &FaStr,
+            _forth: &'forth mut Forth<()>,
+        ) -> Self::Future {
+             unreachable!("no async builtins should be called in this test")
+        }
+    }
+
+    let tokd = tokenize(contents, true).unwrap();
+    let mut forth = AsyncLBForth::from_params(tokd.settings, (), Forth::FULL_BUILTINS, TestAsyncDispatcher);
+    async_blockon_runtest_with(contents, &mut forth.forth);
+}
+
+/// Like `async_blockon_runtest`, but with provided context + dispatcher
+#[cfg(feature = "async")]
+pub fn async_blockon_runtest_with_dispatcher<T, D>(contents: &str, context: T, dispatcher: D)
+where
+    T: 'static,
+    D: for<'forth> crate::dictionary::AsyncBuiltins<'forth, T>,
+{
+    use crate::leakbox::AsyncLBForth;
+
+    let tokd = tokenize(contents, true).unwrap();
+    let mut forth = AsyncLBForth::from_params(tokd.settings, context, Forth::FULL_BUILTINS, dispatcher);
+    async_blockon_runtest_with(contents, &mut forth.forth);
+}
+
+/// Like `async_blockon_runtest`, but with provided async vm
+#[cfg(feature = "async")]
+pub fn async_blockon_runtest_with<T, D>(contents: &str, forth: &mut crate::AsyncForth<T, D>)
+where
+    T: 'static,
+    D: for<'forth> crate::dictionary::AsyncBuiltins<'forth, T>,
+{
+    let tokd = tokenize(contents, false).unwrap();
+    for Step { input, output: outcome } in tokd.steps.iter() {
+        forth.input_mut().fill(&input).unwrap();
+        let res = futures::executor::block_on(forth.process_line());
+        check_output(res, outcome, forth.output().as_str());
+        forth.output_mut().clear();
+    }
+}
+
+fn check_output(res: Result<(), Error>, outcome: &Outcome, output: &str) {
+    match (res, outcome) {
+        (Ok(()), Outcome::OkAnyOutput) => {}
+        (Ok(()), Outcome::OkWithOutput(exp)) => {
+            let act_lines = output.lines().collect::<Vec<&str>>();
+            assert_eq!(act_lines.len(), exp.len());
+            act_lines.iter().zip(exp.iter()).for_each(|(a, e)| {
+                assert_eq!(a.trim_end(), e.trim_end());
+            })
+        }
+        (Err(_e), Outcome::FatalError) => {}
+        (res, exp) => {
+            eprintln!("Error!");
+            eprintln!("Expected: {exp:?}");
+            eprintln!("Got: {res:?}");
+            if res.is_ok() {
+                eprintln!("Output:\n{}", output);
+            }
+            panic!();
+        }
+    }
+}
+
+// Runs the given steps against the given forth VM.
+//
+// Panics on any mismatch
+fn blocking_steps_with<T>(steps: &[Step], forth: &mut Forth<T>) {
+    for Step { input, output: outcome } in steps.into_iter() {
+        forth.input.fill(&input).unwrap();
+        let res = forth.process_line();
+        check_output(res, outcome, forth.output.as_str());
+        forth.output.clear();
+    }
 }
 
 #[derive(Debug)]

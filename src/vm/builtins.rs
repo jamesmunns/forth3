@@ -660,17 +660,15 @@ impl<T: 'static> Forth<T> {
         Ok(())
     }
 
-    /// Add
-    ///
-    /// Does this doctest work?
+    /// # Add (`+`)
     ///
     /// ```rust
     /// # use forth3::testutil::blocking_runtest;
     /// #
     /// # blocking_runtest(r#"
-    /// > : star 42 emit ;
-    /// > star
-    /// < *ok.
+    /// > 1 2 +
+    /// > .
+    /// < 3 ok.
     /// # "#)
     pub fn add(&mut self) -> Result<(), Error> {
         let a = self.data_stack.try_pop()?;
