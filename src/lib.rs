@@ -402,6 +402,218 @@ pub mod test {
         "#);
     }
 
+    #[test]
+    fn it_still_works_when_deepcopied() {
+        let mut lbforth1 = LBForth::from_params(
+            LBForthParams::default(),
+            TestContext::default(),
+            Forth::<TestContext>::FULL_BUILTINS,
+        );
+
+        let forth1 = &mut lbforth1.forth;
+
+        // run all the tests on the first forth VM
+        println!("\n --- testing first forth VM --- \n");
+        blocking_runtest_with(forth1, r#"
+            > 2 3 + .
+            < 5 ok.
+            > : yay 2 3 + . ;
+            < ok.
+            > yay yay yay
+            < 5 5 5 ok.
+            > : boop yay yay ;
+            < ok.
+            > boop
+            < 5 5 ok.
+            > : err if boop boop boop else yay yay then ;
+            < ok.
+            > : erf if boop boop boop then yay yay ;
+            < ok.
+            > 0 err
+            < 5 5 ok.
+            > 1 err
+            < 5 5 5 5 5 5 ok.
+            > 0 erf
+            < 5 5 ok.
+            > 1 erf
+            < 5 5 5 5 5 5 5 5 ok.
+            > : one 1 . ;
+            < ok.
+            > : two 2 . ;
+            < ok.
+            > : six 6 . ;
+            < ok.
+            > : nif if one if two two else six then one then ;
+            < ok.
+            >   0 nif
+            < ok.
+            > 0 1 nif
+            < 1 6 1 ok.
+            > 1 1 nif
+            < 1 2 2 1 ok.
+            > 42 emit
+            < *ok.
+            > : star 42 emit ;
+            < ok.
+            > star star star
+            < ***ok.
+            > : sloop one 5 0 do star star loop six ;
+            < ok.
+            > sloop
+            < 1 **********6 ok.
+            > : count 10 0 do i . loop ;
+            < ok.
+            > count
+            < 0 1 2 3 4 5 6 7 8 9 ok.
+            > : smod 10 0 do i 3 mod not if star then loop ;
+            < ok.
+            > smod
+            < ****ok.
+            > : beep ." hello, world! " ;
+            < ok.
+            > beep
+            < hello, world! ok.
+            > constant x 123
+            < ok.
+            > x .
+            < 123 ok.
+            > 4 x + .
+            < 127 ok.
+            > variable y
+            < ok.
+            > y @ .
+            < 0 ok.
+            > 10 y !
+            < ok.
+            > y @ .
+            < 10 ok.
+            > array z 4
+            < ok.
+            > z @ . z 1 w+ @ . z 2 w+ @ . z 3 w+ @ .
+            < 0 0 0 0 ok.
+            > 10 z ! 20 z 1 w+ ! 30 z 2 w+ ! 40 z 3 w+ !
+            < ok.
+            > z @ . z 1 w+ @ . z 2 w+ @ . z 3 w+ @ .
+            < 10 20 30 40 ok.
+            > forget z
+            < ok.
+            > variable a
+            < ok.
+            > 100 a !
+            < ok.
+            > array z 4
+            < ok.
+            > z @ . z 1 w+ @ . z 2 w+ @ . z 3 w+ @ .
+            < 0 0 0 0 ok.
+            "#
+        );
+
+        // create a new forth VM, and deep copy the first VM's dictionary into
+        // the second.
+        let mut lbforth2 = LBForth::from_params(
+            LBForthParams::default(),
+            TestContext::default(),
+            Forth::<TestContext>::FULL_BUILTINS,
+        );
+
+        let forth2 = &mut lbforth2.forth;
+        forth1.dict.deep_copy(&mut forth2.dict).expect("deep copy should work");
+
+        println!("\n --- testing second forth VM --- \n");
+        blocking_runtest_with(forth2, r#"
+            ( all the bindings in the old VM's dictionary should be present in the
+              new VM, and, it shouldn't segfault... :D )
+            > yay yay yay
+            < 5 5 5 ok.
+            > boop
+            < 5 5 ok.
+            > 0 err
+            < 5 5 ok.
+            > 1 err
+            < 5 5 5 5 5 5 ok.
+            > 0 erf
+            < 5 5 ok.
+            > 1 erf
+            < 5 5 5 5 5 5 5 5 ok.
+            >   0 nif
+            < ok.
+            > 0 1 nif
+            < 1 6 1 ok.
+            > 1 1 nif
+            < 1 2 2 1 ok.
+            > star star star
+            < ***ok.
+            > sloop
+            < 1 **********6 ok.
+            > count
+            < 0 1 2 3 4 5 6 7 8 9 ok.
+            > smod
+            < ****ok.
+            > beep
+            < hello, world! ok.
+            > x .
+            < 123 ok.
+            > 4 x + .
+            < 127 ok.
+
+            ( the existing `y` variable should have its second value from the
+              first test. )
+            > y @ .
+            < 10 ok.
+
+            ( reassigning `y` is okay )
+            > 100 y !
+            < ok.
+            > y @ .
+            < 100 ok.
+
+            ( also reassign `a` )
+            > 500 a !
+            < ok.
+
+            > z @ . z 1 w+ @ . z 2 w+ @ . z 3 w+ @ .
+            < 0 0 0 0 ok.
+
+            ( define a new word in `forth2`. )
+            > : star3 star star star ;
+            < ok.
+            > star3
+            < ***ok.
+
+            ( define a new variable in forth2 )
+            > variable foo
+            < ok.
+            > foo @ .
+            < 0 ok.
+            > 123 foo !
+            < ok.
+            > foo @ .
+            < 123 ok.
+        "#);
+
+        // check that forth1's bindings aren't clobbered
+        println!("\n --- retesting first VM's bindings --- \n");
+        blocking_runtest_with( forth1, r#"
+            ( the existing `y` variable should have its second value from the
+              first test. )
+            > y @ .
+            < 10 ok.
+            > a @ .
+            < 100 ok.
+        "#);
+        // new words defined in forth2 don't exist in forth1
+        forth1.input.fill("star3").unwrap();
+        assert_eq!(forth1.process_line(), Err(Error::LookupFailed));
+        forth1.output.clear();
+        forth1.return_stack.clear();
+
+        // and neither do new variables.
+        forth1.input.fill("foo @ .").unwrap();
+        assert_eq!(forth1.process_line(), Err(Error::LookupFailed));
+        forth1.output.clear();
+        forth1.return_stack.clear();
+    }
+
     struct CountingFut<'forth> {
         target: usize,
         ctr: usize,

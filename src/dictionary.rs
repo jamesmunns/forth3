@@ -204,6 +204,11 @@ impl<T: 'static> DictionaryEntry<T> {
         let pfp: *mut [Word; 0] = addr_of_mut!((*ptr).parameter_field);
         NonNull::new_unchecked(pfp.cast::<Word>())
     }
+
+    pub fn parameters(&self) -> &[Word] {
+        let pfp = self.parameter_field.as_ptr();
+        unsafe { core::slice::from_raw_parts(pfp, self.hdr.len as usize) }
+    }
 }
 
 impl<T: 'static> Dictionary<T> {
@@ -248,6 +253,59 @@ impl<T: 'static> Dictionary<T> {
             next: self.tail,
             _dict: PhantomData,
         }
+    }
+
+    /// Performs a deep copy of all entries in `self` into `other`.
+    ///
+    /// This is an *O*(*entries*) operation, as it traverses all entries in
+    /// `self` and constructs new entries in `other` with the same data. This
+    /// means that all pointers in the `other` dictionary should point into
+    /// `other`'s bump arena, rather than `self`'s. Changes to bindings in
+    /// `self` after a deep copy is performed will not effect bindings in
+    /// `other`, and changes to bindings in `other` will not effect the existing
+    /// bindings in `self`.
+    ///
+    /// # Errors
+    ///
+    /// This method returns an error if `other`'s bump arena lacks sufficient
+    /// capacity to store all the entries in `self`.
+    pub(crate) fn deep_copy(&self, other: &mut Self) -> Result<(), BumpError> {
+        // before doing a partial copy, check that other has room for everything
+        let remaining = other.alloc.capacity() - other.alloc.used();
+        if remaining < self.alloc.used() {
+            return Err(BumpError::OutOfMemory);
+        }
+
+        for entry in self.entries() {
+            debug_assert!(matches!(entry.hdr.kind, EntryKind::RuntimeBuiltin | EntryKind::Dictionary));
+            // TODO(eliza): i think this might be potentially wasteful if the
+            // entry's name came from a `'static str` rather than a runtime
+            // string...can we track that and avoid interning it into the new dict?
+            let name = other.alloc.bump_str(entry.hdr.name.as_str())?;
+
+            // NOTE(eliza): the capacity check means we should be able to unwrap
+            // this, I think, but whatever...
+            let base = other.alloc.bump::<DictionaryEntry<T>>()?;
+            for word in entry.parameters() {
+                other.alloc.bump_write(*word)?;
+            }
+            unsafe {
+                base.as_ptr().write(DictionaryEntry {
+                    hdr: EntryHeader {
+                        name,
+                        kind: entry.hdr.kind,
+                        len: entry.hdr.len,
+                        _pd: PhantomData,
+                    },
+                    func: entry.func,
+                    link: other.tail.take(),
+                    parameter_field: [],
+                });
+            }
+            other.tail = Some(base);
+        }
+
+        Ok(())
     }
 }
 
