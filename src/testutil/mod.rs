@@ -134,6 +134,7 @@ where
 {
     let tokd = tokenize(contents, false).unwrap();
     for Step { ref input, output: ref outcome } in tokd.steps {
+        #[cfg(not(miri))]
         println!("> {input}");
         forth.input_mut().fill(input).unwrap();
         let res = futures::executor::block_on(forth.process_line());
@@ -143,6 +144,7 @@ where
 }
 
 fn check_output(res: Result<(), Error>, outcome: &Outcome, output: &str) {
+    #[cfg(not(miri))]
     println!("< {output}");
     match (res, outcome) {
         (Ok(()), Outcome::OkAnyOutput) => {}
@@ -171,6 +173,7 @@ fn check_output(res: Result<(), Error>, outcome: &Outcome, output: &str) {
 // Panics on any mismatch
 fn blocking_steps_with<T>(steps: &[Step], forth: &mut Forth<T>) {
     for Step { input, output: outcome } in steps {
+        #[cfg(not(miri))]
         println!("> {input}");
         forth.input.fill(input).unwrap();
         let res = forth.process_line();
