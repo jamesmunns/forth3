@@ -27,11 +27,11 @@ pub enum EntryKind {
 }
 
 /// Where a dictionary entry was found
-pub enum DictLocation<T> {
+pub enum DictLocation<T: 'static> {
     /// The entry was found in the current (mutable) dictionary.
-    Parent(T),
+    Parent(NonNull<DictionaryEntry<T>>),
     /// The entry was found in a parent (frozen) dictionary.
-    Current(T),
+    Current(NonNull<DictionaryEntry<T>>),
 }
 
 #[repr(C)]
@@ -523,7 +523,7 @@ impl<T: > EntryBuilder<'_, T> {
 // === impl Entries ===
 
 impl<'dict, T: 'static> Iterator for Entries<'dict, T> {
-    type Item = DictLocation<&'dict DictionaryEntry<T>>;
+    type Item = DictLocation<T>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -541,13 +541,12 @@ impl<'dict, T: 'static> Iterator for Entries<'dict, T> {
                     }
                 }
             };
-            let entry = unsafe {
+            self.next = unsafe {
                 // Safety: `self.next` must be a pointer into the VM's dictionary
                 // entries. The caller who constructs a `Entries` iterator is
                 // responsible for ensuring this.
-                entry.as_ref()
+                entry.as_ref().link
             };
-            self.next = entry.link;
             let found = match self.dict {
                 CurrDict::Leaf(_) => DictLocation::Current(entry),
                 CurrDict::Parent(_) => DictLocation::Parent(entry),
@@ -665,18 +664,11 @@ impl DictionaryBump {
     }
 }
 
-impl<T: 'static> DictLocation<&'_ DictionaryEntry<T>> {
-    pub(crate) fn header(&self) -> &EntryHeader<T> {
+impl<T: 'static> DictLocation<T> {
+    pub(crate) fn entry(&self) -> NonNull<DictionaryEntry<T>> {
         match self {
-            Self::Current(entry) => &entry.hdr,
-            Self::Parent(entry) => &entry.hdr,
-        }
-    }
-
-    pub(crate) fn into_non_null(self) -> DictLocation<NonNull<DictionaryEntry<T>>> {
-        match self {
-            Self::Current(entry) => DictLocation::Current(NonNull::from(entry)),
-            Self::Parent(entry) => DictLocation::Parent(NonNull::from(entry)),
+            Self::Current(entry) => *entry,
+            Self::Parent(entry) => *entry,
         }
     }
 }
@@ -800,16 +792,14 @@ pub mod test {
         let buf_1_ro = buf_1.fork_onto(buf_2);
 
         // Find the builtin in the original slab, it should say "current" here
-        let ro_find = buf_1_ro.entries().find(|e| match e {
-            DictLocation::Parent(e) => e.hdr.name.as_str() == "stubby",
-            DictLocation::Current(e) => e.hdr.name.as_str() == "stubby",
+        let ro_find = buf_1_ro.entries().find(|e| {
+            unsafe { e.entry().as_ref() }.hdr.name.as_str() == "stubby"
         }).unwrap();
         assert!(matches!(ro_find, DictLocation::Current(_)));
 
         // Now find the builtin in the new mutable slab, it should say "parent" here
-        let rw_find = buf_1.entries().find(|e| match e {
-            DictLocation::Parent(e) => e.hdr.name.as_str() == "stubby",
-            DictLocation::Current(e) => e.hdr.name.as_str() == "stubby",
+        let rw_find = buf_1.entries().find(|e| {
+            unsafe { e.entry().as_ref() }.hdr.name.as_str() == "stubby"
         }).unwrap();
         assert!(matches!(rw_find, DictLocation::Parent(_)));
     }

@@ -183,9 +183,9 @@ impl<T: 'static> CallContext<T> {
             EntryKind::RuntimeBuiltin => None,
             #[cfg(feature = "async")]
             EntryKind::AsyncBuiltin => None,
-            EntryKind::Dictionary => {
-                let de = unsafe { self.eh.cast::<DictionaryEntry<T>>().as_ref() };
-                de.parameters().get(self.idx as usize)
+            EntryKind::Dictionary => unsafe {
+                let de = self.eh.cast::<DictionaryEntry<T>>();
+                Some(&*DictionaryEntry::pfa(de).as_ptr().add(self.idx as usize))
             },
         }
     }
@@ -198,7 +198,7 @@ impl<T: 'static> CallContext<T> {
 type WordFunc<T> = fn(&mut Forth<T>) -> Result<(), Error>;
 
 pub enum Lookup<T: 'static> {
-    Dict(DictLocation<NonNull<DictionaryEntry<T>>>),
+    Dict(DictLocation<T>),
     Literal {
         val: i32,
     },

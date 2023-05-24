@@ -191,10 +191,9 @@ impl<T> Forth<T> {
             .map(NonNull::from)
     }
 
-    fn find_in_dict(&self, fastr: &TmpFaStr<'_>) -> Option<DictLocation<NonNull<DictionaryEntry<T>>>> {
+    fn find_in_dict(&self, fastr: &TmpFaStr<'_>) -> Option<DictLocation<T>> {
         self.dict.entries()
-            .find(|de| &(de.header().name) == fastr.deref())
-            .map(DictLocation::into_non_null)
+            .find(|de| &unsafe { de.entry().as_ref() }.hdr.name == fastr.deref())
     }
 
     pub fn lookup(&self, word: &str) -> Result<Lookup<T>, Error> {

@@ -228,7 +228,7 @@ impl<T: 'static> Forth<T> {
         let Self { output, dict, .. } = self;
         output.write_str("dictionary: ")?;
         for item in dict.entries() {
-            output.write_str(item.header().name.as_str())?;
+            output.write_str(unsafe { item.entry().as_ref() }.hdr.name.as_str())?;
             if let DictLocation::Parent(_) = item {
                 // indicate that this binding is inherited from a parent.
                 // XXX(eliza): i was initially gonna add "(inherited)" but that
