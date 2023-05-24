@@ -75,8 +75,18 @@ pub struct DictionaryEntry<T: 'static> {
     pub(crate) parameter_field: [Word; 0],
 }
 
+/// A handle to an owned, mutable dictionary allocation.
 pub struct OwnedDict<T: 'static>(NonNull<Dictionary<T>>);
 
+/// A handle to a shared, atomically reference counted dictionary allocation.
+///
+/// The contents of this dictionary are frozen and can no longer be mutated.
+/// However, a `SharedDict` can be inexpensively cloned by incrementing its
+/// reference count.
+///
+/// When a VM is forked into a child VM, its current [`OwnedDict`] is
+/// transformed into a `SharedDict`, which both its new `OwnedDict` and the
+/// child VM's `OwnedDict` will reference as their parents.
 pub(crate) struct SharedDict<T: 'static>(NonNull<Dictionary<T>>);
 
 pub struct Dictionary<T: 'static> {

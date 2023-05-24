@@ -121,6 +121,23 @@ impl<T> Forth<T> {
         })
     }
 
+    /// Constructs a new VM whose dictionary is a fork of this VM's dictionary.
+    ///
+    /// The current dictionary owned by this VM is frozen (made immutable), and
+    /// a reference to it is shared with this VM and the new child VM. When both
+    /// this VM and the child are dropped, the frozen dictionary is deallocated.
+    ///
+    /// This function takes two [`OwnedDict`]s as arguments: `new_dict` is the
+    /// dictionary allocation for the forked child VM, while `my_dict` is a new
+    /// allocation for this VM's mutable dictionary (which replaces the current
+    /// dictionary, as it will become frozen).
+    ///
+    /// The child VM is created with empty stacks, and the provided input and
+    /// output buffers.
+    ///
+    /// # Safety
+    ///
+    /// This method requires the same invariants be upheld as [`Forth::new`].
     pub unsafe fn fork(
         &mut self,
         mut new_dict: OwnedDict<T>,
@@ -298,7 +315,6 @@ impl<T> Forth<T> {
                         p = p.offset(1);
                     }
                 }
-                // XXX(eliza): I *think* this is safe? FaStrs are immutable, right?
                 let name = unsafe {
                     // safety: a `FaStr` points to a string region stored in a
                     // dictionary. we can alias the name because our dictionary

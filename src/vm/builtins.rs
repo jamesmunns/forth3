@@ -233,8 +233,6 @@ impl<T: 'static> Forth<T> {
                 // indicate that this binding is inherited from a parent.
                 // XXX(eliza): i was initially gonna add "(inherited)" but that
                 // makes some of the tests overflow their output buffer, lol.
-                // idk if the output of the `dict` word is standardized, is this
-                // okay to do?
                 output.write_str("*")?;
             }
             output.write_str(", ")?;

@@ -142,6 +142,13 @@ impl<T: 'static> LBForth<T> {
         }
     }
 
+    /// Constructs a new VM whose dictionary is a fork of this VM's dictionary.
+    ///
+    /// The current dictionary owned by this VM is frozen (made immutable), and
+    /// a reference to it is shared with this VM and the new child VM. When both
+    /// this VM and the child are dropped, the frozen dictionary is deallocated.
+    ///
+    /// The child VM is created with empty stacks and input and output buffers.
     pub fn fork_with_params(&mut self, params: LBForthParams, host_ctxt: T) -> Self {
         let _payload_dstack: LeakBox<Word> = LeakBox::new(params.data_stack_elems);
         let _payload_rstack: LeakBox<Word> = LeakBox::new(params.return_stack_elems);
@@ -222,6 +229,13 @@ where
         }
     }
 
+    /// Constructs a new VM whose dictionary is a fork of this VM's dictionary.
+    ///
+    /// The current dictionary owned by this VM is frozen (made immutable), and
+    /// a reference to it is shared with this VM and the new child VM. When both
+    /// this VM and the child are dropped, the frozen dictionary is deallocated.
+    ///
+    /// The child VM is created with empty stacks and input and output buffers.
     pub fn fork_with_params(&mut self, params: LBForthParams, host_ctxt: T) -> Self
     where D: Clone {
         let _payload_dstack: LeakBox<Word> = LeakBox::new(params.data_stack_elems);
