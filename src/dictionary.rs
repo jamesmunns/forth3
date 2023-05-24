@@ -303,7 +303,10 @@ impl<T: 'static> SharedDict<T> {
     #[inline(never)]
     unsafe fn drop_slow(&mut self) {
         unsafe {
-            ptr::drop_in_place(self.0.as_ptr())
+            let dealloc = self.deallocate;
+            let layout = Dictionary::<T>::layout(self.alloc.capacity()).unwrap();
+            ptr::drop_in_place(self.0.as_ptr());
+            (dealloc)(self.0.cast(), layout);
         }
     }
 }
@@ -724,8 +727,15 @@ pub mod test {
 
     #[test]
     fn just_one_dict() {
-
         let buf: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(512);
         assert_eq!(buf.refs.load(Ordering::Relaxed), usize::MAX);
+    }
+
+    #[test]
+    fn nested_dicts() {
+        let buf_1: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(512);
+        let mut buf_2: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(256);
+        let buf_1 = buf_1.into_shared();
+        buf_2.parent = Some(buf_1);
     }
 }
