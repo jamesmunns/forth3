@@ -685,7 +685,7 @@ pub mod test {
     use crate::{
         dictionary::{DictionaryBump, DictionaryEntry, BuiltinEntry},
         leakbox::{LeakBox, alloc_dict, LeakBoxDict},
-        Word,
+        Word, Error, Forth,
     };
 
     #[cfg(feature = "async")]
@@ -763,5 +763,19 @@ pub mod test {
 
         drop(buf_3);
         assert_eq!(buf_1.refs.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn allocs_work() {
+        fn stubby(_f: &mut Forth<()>) -> Result<(), Error> {
+            panic!("Don't ACTUALLY call me!");
+        }
+
+        let mut buf: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(512);
+        assert!(buf.tail.is_none());
+
+        let strname = buf.alloc.bump_str("stubby").unwrap();
+        buf.add_bi_fastr(strname, stubby).unwrap();
+        assert_eq!(unsafe { buf.tail.as_ref().unwrap().as_ref().hdr.name.as_str() }, "stubby");
     }
 }
