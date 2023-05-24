@@ -616,10 +616,10 @@ pub mod test {
             < 666 ok.
 
             (redefine `beep` )
-            > : beep ." goodbye, world!" ;
+            > : beep ." goodbye, world! " ;
             < ok.
             > beep
-            < goodbye, world!ok.
+            < goodbye, world! ok.
 
             ( define a new var )
             > variable q
@@ -640,7 +640,7 @@ pub mod test {
             > y @ .
             < 100 ok.
             > beep
-            < hello, world!ok.
+            < hello, world! ok.
         "#);
 
         // and neither do new variables.
