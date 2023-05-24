@@ -10,7 +10,7 @@ cfg-if = "1.0.0"
 hash32 = "0.3.1"
 
 [features]
-default = ["async", "use-std", "floats"] # TODO AJM REMOVE
+default = []
 use-std = []
 floats = []
 async = []
