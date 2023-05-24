@@ -290,25 +290,25 @@ pub mod test {
 
         assert_eq!(0, forth.dict_alloc.used());
 
-        blocking_runtest_with(r#"
+        blocking_runtest_with(forth, r#"
             > : yay 2 3 + . ;
             > : boop yay yay ;
-        "#, forth);
+        "#);
 
-        blocking_runtest_with(r#"
+        blocking_runtest_with(forth, r#"
             x : derp boop yay
-        "#, forth);
+        "#);
         assert!(forth.return_stack.is_empty());
 
-        blocking_runtest_with(r#"
+        blocking_runtest_with(forth, r#"
             x : doot yay yaay
-        "#, forth);
+        "#);
         assert!(forth.return_stack.is_empty());
 
-        blocking_runtest_with(r#"
+        blocking_runtest_with(forth, r#"
             > boop yay
             < 5 5 5 ok.
-        "#, forth);
+        "#);
         assert!(forth.data_stack.is_empty());
         assert!(forth.call_stack.is_empty());
 
@@ -325,14 +325,14 @@ pub mod test {
         }
         forth.add_builtin("squirrel", squirrel).unwrap();
 
-        blocking_runtest_with(r#"
+        blocking_runtest_with(forth, r#"
             > 5 6 squirrel squirrel
             < ok.
             > : sqloop 10 0 do i squirrel loop ;
             < ok.
             > sqloop
             < ok.
-        "#, forth);
+        "#);
 
         let expected = [6, 5, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
         assert_eq!(&expected, forth.host_ctxt.contents.as_slice());
@@ -460,19 +460,22 @@ pub mod test {
             }
         }
 
-        async_blockon_runtest_with_dispatcher(r#"
-            ( stack is empty... )
-            x .
+        async_blockon_runtest_with_dispatcher(
+            TestContext::default(),
+            TestAsyncDispatcher, r#"
+                ( stack is empty... )
+                x .
 
-            ( async builtin... )
-            > 5 counter
-            < ok.
+                ( async builtin... )
+                > 5 counter
+                < ok.
 
-            ( exactly 5 placed back on the stack )
-            > .
-            < 5 ok.
-            x .
-        "#, TestContext::default(), TestAsyncDispatcher);
+                ( exactly 5 placed back on the stack )
+                > .
+                < 5 ok.
+                x .
+            "#
+        );
     }
 
     #[test]

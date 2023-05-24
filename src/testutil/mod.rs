@@ -78,7 +78,7 @@ pub fn blocking_runtest(contents: &str) {
 /// Run the given forth ui-test against the given forth vm.
 ///
 /// Does not accept ui-tests with frontmatter configuration (will panic)
-pub fn blocking_runtest_with<T>(contents: &str, forth: &mut Forth<T>) {
+pub fn blocking_runtest_with<T>(forth: &mut Forth<T>, contents: &str) {
     let tokd = tokenize(contents, false).unwrap();
     blocking_steps_with(tokd.steps.as_slice(), forth);
 }
@@ -108,12 +108,12 @@ pub fn async_blockon_runtest(contents: &str)
 
     let tokd = tokenize(contents, true).unwrap();
     let mut forth = AsyncLBForth::from_params(tokd.settings, (), Forth::FULL_BUILTINS, TestAsyncDispatcher);
-    async_blockon_runtest_with(contents, &mut forth.forth);
+    async_blockon_runtest_with(&mut forth.forth, contents);
 }
 
 /// Like `async_blockon_runtest`, but with provided context + dispatcher
 #[cfg(feature = "async")]
-pub fn async_blockon_runtest_with_dispatcher<T, D>(contents: &str, context: T, dispatcher: D)
+pub fn async_blockon_runtest_with_dispatcher<T, D>(context: T, dispatcher: D, contents: &str)
 where
     T: 'static,
     D: for<'forth> crate::dictionary::AsyncBuiltins<'forth, T>,
@@ -122,12 +122,12 @@ where
 
     let tokd = tokenize(contents, true).unwrap();
     let mut forth = AsyncLBForth::from_params(tokd.settings, context, Forth::FULL_BUILTINS, dispatcher);
-    async_blockon_runtest_with(contents, &mut forth.forth);
+    async_blockon_runtest_with(&mut forth.forth, contents);
 }
 
 /// Like `async_blockon_runtest`, but with provided async vm
 #[cfg(feature = "async")]
-pub fn async_blockon_runtest_with<T, D>(contents: &str, forth: &mut crate::AsyncForth<T, D>)
+pub fn async_blockon_runtest_with<T, D>(forth: &mut crate::AsyncForth<T, D>, contents: &str)
 where
     T: 'static,
     D: for<'forth> crate::dictionary::AsyncBuiltins<'forth, T>,
@@ -177,22 +177,22 @@ fn blocking_steps_with<T>(steps: &[Step], forth: &mut Forth<T>) {
 }
 
 #[derive(Debug)]
-pub enum Outcome {
+enum Outcome {
     OkAnyOutput,
     OkWithOutput(Vec<String>),
     FatalError,
 }
 
 #[derive(Debug)]
-pub struct Step {
-    pub input: String,
-    pub output: Outcome,
+struct Step {
+    input: String,
+    output: Outcome,
 }
 
 #[derive(Default, Debug)]
-pub struct Tokenized {
-    pub settings: LBForthParams,
-    pub steps: Vec<Step>,
+struct Tokenized {
+    settings: LBForthParams,
+    steps: Vec<Step>,
 }
 
 fn tokenize(contents: &str, allow_frontmatter: bool) -> Result<Tokenized, ()> {
