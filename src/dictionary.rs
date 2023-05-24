@@ -725,17 +725,43 @@ pub mod test {
         }
     }
 
+    // This test just checks that we can properly allocate and deallocate an OwnedDict
+    //
+    // Intended to be run with miri or valgrind where leaks are made apparent
     #[test]
     fn just_one_dict() {
         let buf: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(512);
         assert_eq!(buf.refs.load(Ordering::Relaxed), usize::MAX);
     }
 
+    // This test just checks that we can properly allocate and deallocate a chain of dicts
+    //
+    // Intended to be run with miri or valgrind where leaks are made apparent
     #[test]
     fn nested_dicts() {
         let buf_1: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(512);
         let mut buf_2: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(256);
         let buf_1 = buf_1.into_shared();
         buf_2.parent = Some(buf_1);
+    }
+
+    // Similar to above, but making sure refcounting works properly
+    #[test]
+    fn shared_dicts() {
+        let buf_1: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(512);
+        let mut buf_2: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(256);
+        let mut buf_3: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(128);
+        let buf_1 = buf_1.into_shared();
+        assert_eq!(buf_1.refs.load(Ordering::Relaxed), 1);
+        buf_2.parent = Some(buf_1.clone());
+        assert_eq!(buf_1.refs.load(Ordering::Relaxed), 2);
+        buf_3.parent = Some(buf_1.clone());
+        assert_eq!(buf_1.refs.load(Ordering::Relaxed), 3);
+
+        drop(buf_2);
+        assert_eq!(buf_1.refs.load(Ordering::Relaxed), 2);
+
+        drop(buf_3);
+        assert_eq!(buf_1.refs.load(Ordering::Relaxed), 1);
     }
 }
