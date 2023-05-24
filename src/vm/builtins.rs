@@ -367,7 +367,7 @@ impl<T: 'static> Forth<T> {
             // mutate that dictionary, so we must create a new entry in the
             // current dict saying that the definition is forgotten.
             // XXX(eliza): or this could be a runtime error? IDK...
-            DictLocation::Parent(de) => {
+            DictLocation::Parent(_de) => {
                 todo!("eliza: forget parent definitions");
             }
         }

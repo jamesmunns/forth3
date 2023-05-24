@@ -70,7 +70,7 @@ where
 
     pub unsafe fn fork(
         &mut self,
-        mut new_dict: OwnedDict<T>,
+        new_dict: OwnedDict<T>,
         my_dict: OwnedDict<T>,
         dstack_buf: (*mut Word, usize),
         rstack_buf: (*mut Word, usize),
