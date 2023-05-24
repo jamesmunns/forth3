@@ -141,9 +141,10 @@ impl<T: 'static> CallContext<T> {
             EntryKind::RuntimeBuiltin => Err(Error::BuiltinHasNoNextValue),
             #[cfg(feature = "async")]
             EntryKind::AsyncBuiltin => Err(Error::BuiltinHasNoNextValue),
-            EntryKind::Dictionary => {
-                let de = unsafe { self.eh.cast::<DictionaryEntry<T>>().as_ref() };
-                Ok(&de.parameters()[req_start as usize ..= req_end as usize])
+            EntryKind::Dictionary => unsafe {
+                let de = self.eh.cast::<DictionaryEntry<T>>();
+                let start = DictionaryEntry::pfa(de).as_ptr().add(req_start as usize);
+                Ok(core::slice::from_raw_parts(start, n as usize))
             },
         }
     }
@@ -154,15 +155,20 @@ impl<T: 'static> CallContext<T> {
     }
 
     fn get_current_word(&self) -> Result<Word, Error> {
+        if self.idx >= self.len {
+            return Err(Error::BadCfaOffset);
+        }
         let eh = unsafe { self.eh.as_ref() };
         match eh.kind {
             EntryKind::StaticBuiltin => Err(Error::BuiltinHasNoNextValue),
             EntryKind::RuntimeBuiltin => Err(Error::BuiltinHasNoNextValue),
             #[cfg(feature = "async")]
             EntryKind::AsyncBuiltin => Err(Error::BuiltinHasNoNextValue),
-            EntryKind::Dictionary => {
-                let de = unsafe { self.eh.cast::<DictionaryEntry<T>>().as_ref() };
-                de.parameters().get(self.idx as usize).copied().ok_or(Error::BadCfaOffset)
+            EntryKind::Dictionary => unsafe {
+                let de = self.eh.cast::<DictionaryEntry<T>>();
+                let val_ptr = DictionaryEntry::pfa(de).as_ptr().add(self.idx as usize);
+                let val = val_ptr.read();
+                Ok(val)
             },
         }
     }
@@ -177,6 +183,9 @@ impl<T: 'static> CallContext<T> {
     }
 
     fn get_word_at_cur_idx(&self) -> Option<&Word> {
+        if self.idx >= self.len {
+            return None;
+        }
         let eh = unsafe { self.eh.as_ref() };
         match eh.kind {
             EntryKind::StaticBuiltin => None,
