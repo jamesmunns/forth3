@@ -596,16 +596,9 @@ pub mod test {
             < 100 ok.
         "#);
         // new words defined in forth2 don't exist in forth1
-        lbforth1.forth.input.fill("star3").unwrap();
-        assert_eq!(lbforth1.forth.process_line(), Err(Error::LookupFailed));
-        lbforth1.forth.output.clear();
-        lbforth1.forth.return_stack.clear();
-
+        blocking_runtest_with(&mut lbforth1.forth, "x star3");
         // and neither do new variables.
-        lbforth1.forth.input.fill("foo @ .").unwrap();
-        assert_eq!(lbforth1.forth.process_line(), Err(Error::LookupFailed));
-        lbforth1.forth.output.clear();
-        lbforth1.forth.return_stack.clear();
+        blocking_runtest_with(&mut lbforth1.forth, "x foo @ .");
 
         // have forth1 change some of its bindings
         blocking_runtest_with(&mut lbforth1.forth, r#"
@@ -643,11 +636,8 @@ pub mod test {
             < hello, world! ok.
         "#);
 
-        // and neither do new variables.
-        lbforth2.forth.input.fill("q @ .").unwrap();
-        assert_eq!(lbforth2.forth.process_line(), Err(Error::LookupFailed));
-        lbforth2.forth.output.clear();
-        lbforth2.forth.return_stack.clear();
+        // variables defined in forth1 after forking should not be present.
+        blocking_runtest_with(&mut lbforth2.forth, "x q @ .");
 
         print_dict("forth2", &mut lbforth2.forth);
     }
