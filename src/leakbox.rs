@@ -1,12 +1,12 @@
-use core::ptr::NonNull;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::UnsafeCell,
     mem::MaybeUninit,
+    ptr::NonNull,
 };
 
 use crate::{
-    dictionary::{BuiltinEntry}, input::WordStrBuf, output::OutputBuf, word::Word, CallContext, Forth,
+    dictionary::{BuiltinEntry, DropDict, OwnedDict, Dictionary}, input::WordStrBuf, output::OutputBuf, word::Word, CallContext, Forth,
 };
 
 #[cfg(feature = "async")]
@@ -69,6 +69,9 @@ pub struct LBForthParams {
     pub dict_buf_elems: usize,
 }
 
+#[derive(Copy, Clone)]
+struct LeakBoxDict;
+
 impl Default for LBForthParams {
     fn default() -> Self {
         Self {
@@ -89,18 +92,16 @@ pub struct LBForth<T: 'static> {
     _payload_cstack: LeakBox<CallContext<T>>,
     _input_buf: LeakBox<u8>,
     _output_buf: LeakBox<u8>,
-    _dict_buf: LeakBox<u8>,
 }
 
 #[cfg(feature = "async")]
-pub struct AsyncLBForth<T: 'static, D> {
-    pub forth: AsyncForth<T, D>,
+pub struct AsyncLBForth<T: 'static, A> {
+    pub forth: AsyncForth<T, A>,
     _payload_dstack: LeakBox<Word>,
     _payload_rstack: LeakBox<Word>,
     _payload_cstack: LeakBox<CallContext<T>>,
     _input_buf: LeakBox<u8>,
     _output_buf: LeakBox<u8>,
-    _dict_buf: LeakBox<u8>,
 }
 
 impl<T: 'static> LBForth<T> {
@@ -114,7 +115,6 @@ impl<T: 'static> LBForth<T> {
         let _payload_cstack: LeakBox<CallContext<T>> = LeakBox::new(params.control_stack_elems);
         let _input_buf: LeakBox<u8> = LeakBox::new(params.input_buf_elems);
         let _output_buf: LeakBox<u8> = LeakBox::new(params.output_buf_elems);
-        let _dict_buf: LeakBox<u8> = LeakBox::new(params.dict_buf_elems);
 
         let input = WordStrBuf::new(_input_buf.ptr(), _input_buf.len());
         let output = OutputBuf::new(_output_buf.ptr(), _output_buf.len());
@@ -123,7 +123,7 @@ impl<T: 'static> LBForth<T> {
                 (_payload_dstack.ptr(), _payload_dstack.len()),
                 (_payload_rstack.ptr(), _payload_rstack.len()),
                 (_payload_cstack.ptr(), _payload_cstack.len()),
-                (_dict_buf.ptr(), _dict_buf.len()),
+                alloc_dict(params.dict_buf_elems),
                 input,
                 output,
                 host_ctxt,
@@ -139,7 +139,6 @@ impl<T: 'static> LBForth<T> {
             _payload_cstack,
             _input_buf,
             _output_buf,
-            _dict_buf,
         }
     }
 }
@@ -161,7 +160,6 @@ where
         let _payload_cstack: LeakBox<CallContext<T>> = LeakBox::new(params.control_stack_elems);
         let _input_buf: LeakBox<u8> = LeakBox::new(params.input_buf_elems);
         let _output_buf: LeakBox<u8> = LeakBox::new(params.output_buf_elems);
-        let _dict_buf: LeakBox<u8> = LeakBox::new(params.dict_buf_elems);
 
         let input = WordStrBuf::new(_input_buf.ptr(), _input_buf.len());
         let output = OutputBuf::new(_output_buf.ptr(), _output_buf.len());
@@ -170,7 +168,7 @@ where
                 (_payload_dstack.ptr(), _payload_dstack.len()),
                 (_payload_rstack.ptr(), _payload_rstack.len()),
                 (_payload_cstack.ptr(), _payload_cstack.len()),
-                (_dict_buf.ptr(), _dict_buf.len()),
+                alloc_dict(params.dict_buf_elems),
                 input,
                 output,
                 host_ctxt,
@@ -187,7 +185,21 @@ where
             _payload_cstack,
             _input_buf,
             _output_buf,
-            _dict_buf,
         }
     }
+}
+
+impl DropDict for LeakBoxDict {
+    unsafe fn drop_dict(ptr: NonNull<u8>, layout: Layout) {
+        System.dealloc(ptr.cast().as_ptr(), layout)
+    }
+}
+
+fn alloc_dict<T>(size: usize) -> OwnedDict<T> {
+    let layout = match Dictionary::<T>::layout(size) {
+        Ok(layout) => layout,
+        Err(error) => panic!("Dictionary size {size} too large to allocate: {error}"),
+    };
+    let ptr = unsafe { NonNull::new(System.alloc(layout)).unwrap().cast() };
+    OwnedDict::new::<LeakBoxDict>(ptr, size)
 }

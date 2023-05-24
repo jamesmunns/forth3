@@ -1,5 +1,5 @@
 use core::{
-    mem::size_of,
+    mem::{self, size_of},
     num::NonZeroU16,
     ops::{Deref, Neg},
     ptr::NonNull,
@@ -8,7 +8,8 @@ use core::{
 
 use crate::{
     dictionary::{
-        BuiltinEntry, BumpError, Dictionary, DictionaryEntry, EntryHeader, EntryKind,
+        BuiltinEntry, BumpError, DictionaryEntry, EntryHeader, EntryKind,
+        OwnedDict,
     },
     fastr::{FaStr, TmpFaStr},
     input::WordStrBuf,
@@ -35,7 +36,7 @@ pub struct Forth<T: 'static> {
     pub data_stack: Stack<Word>,
     pub(crate) return_stack: Stack<Word>,
     pub(crate) call_stack: Stack<CallContext<T>>,
-    pub(crate) dict: Dictionary<T>,
+    pub(crate) dict: OwnedDict<T>,
     pub input: WordStrBuf,
     pub output: OutputBuf,
     pub host_ctxt: T,
@@ -61,7 +62,7 @@ impl<T> Forth<T> {
         dstack_buf: (*mut Word, usize),
         rstack_buf: (*mut Word, usize),
         cstack_buf: (*mut CallContext<T>, usize),
-        dict_buf: (*mut u8, usize),
+        dict: OwnedDict<T>,
         input: WordStrBuf,
         output: OutputBuf,
         host_ctxt: T,
@@ -70,7 +71,6 @@ impl<T> Forth<T> {
         let data_stack = Stack::new(dstack_buf.0, dstack_buf.1);
         let return_stack = Stack::new(rstack_buf.0, rstack_buf.1);
         let call_stack = Stack::new(cstack_buf.0, cstack_buf.1);
-        let dict = Dictionary::new(dict_buf.0, dict_buf.1);
 
         Ok(Self {
             mode: Mode::Run,
@@ -93,7 +93,7 @@ impl<T> Forth<T> {
         dstack_buf: (*mut Word, usize),
         rstack_buf: (*mut Word, usize),
         cstack_buf: (*mut CallContext<T>, usize),
-        dict_buf: (*mut u8, usize),
+        dict: OwnedDict<T>,
         input: WordStrBuf,
         output: OutputBuf,
         host_ctxt: T,
@@ -103,7 +103,6 @@ impl<T> Forth<T> {
         let data_stack = Stack::new(dstack_buf.0, dstack_buf.1);
         let return_stack = Stack::new(rstack_buf.0, rstack_buf.1);
         let call_stack = Stack::new(cstack_buf.0, cstack_buf.1);
-        let dict = Dictionary::new(dict_buf.0, dict_buf.1);
 
         Ok(Self {
             mode: Mode::Run,

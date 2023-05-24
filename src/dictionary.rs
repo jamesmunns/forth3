@@ -1,10 +1,10 @@
 use crate::fastr::FaStr;
 use crate::{Word, WordFunc};
-use core::mem;
 use core::{
-    alloc::Layout,
+    alloc::{Layout, LayoutError},
     marker::PhantomData,
-    ptr::{addr_of_mut, NonNull},
+    mem::{self, MaybeUninit},
+    ptr::{self, addr_of_mut, NonNull},
     ops::{Deref, DerefMut}
 };
 use portable_atomic::{Ordering::*, AtomicUsize};
@@ -67,9 +67,19 @@ pub struct DictionaryEntry<T: 'static> {
     pub(crate) parameter_field: [Word; 0],
 }
 
-pub struct Dictionary<T: 'static, D: DropDict> {
-    pub(crate) alloc: DictionaryBump,
+#[repr(C)]
+struct DictionaryInner<T: 'static> {
+    pub(crate) header: Dictionary<T>,
+    bytes: [MaybeUninit<u8>; 0],
+}
+
+pub struct SharedDict<T: 'static>(NonNull<Dictionary<T>>);
+
+pub struct OwnedDict<T: 'static>(NonNull<Dictionary<T>>);
+
+pub struct Dictionary<T: 'static> {
     pub(crate) tail: Option<NonNull<DictionaryEntry<T>>>,
+    pub(crate) alloc: DictionaryBump,
     /// Reference count, used to determine when the dictionary can be dropped.
     /// If this is `usize::MAX`, the dictionary is mutable.
     refs: portable_atomic::AtomicUsize,
@@ -78,24 +88,17 @@ pub struct Dictionary<T: 'static, D: DropDict> {
     /// When looking up a binding that isn't present in `self`, we traverse this
     /// chain of references. When dropping the dictionary, we decrement the
     /// parent's ref count.
-    parent: Option<SharedDict<T, D>>,
+    parent: Option<SharedDict<T>>,
+    deallocate: unsafe fn (ptr: NonNull<u8>, layout: Layout),
 }
-
-pub struct SharedDict<T: 'static, D: DropDict>(NonNull<Dictionary<T, D>>);
-
-pub struct OwnedDict<T: 'static, D: DropDict>(NonNull<Dictionary<T, D>>);
 
 pub trait DropDict {
     /// Deallocate a dictionary.
-    ///
-    // TODO(eliza): This does not require a `Layout`, because the dictionary
-    // knows its own size...maybe it should provide one anyway, to make things
-    // more convenient for the allocator?
-    unsafe fn drop_dict<T>(dict: NonNull<Dictionary<T, Self>>);
+    unsafe fn drop_dict(ptr: NonNull<u8>, layout: Layout);
 }
 
-pub(crate) struct EntryBuilder<'dict, T: 'static, D> {
-    dict: &'dict mut Dictionary<T, D>,
+pub(crate) struct EntryBuilder<'dict, T: 'static> {
+    dict: &'dict mut Dictionary<T>,
     len: u16,
     base: NonNull<DictionaryEntry<T>>,
     kind: EntryKind,
@@ -108,11 +111,14 @@ pub(crate) struct DictionaryBump {
 }
 
 /// Iterator over a [`Dictionary`]'s entries.
-pub(crate) struct Entries<'dict, T: 'static, D: DropDict> {
+pub(crate) struct Entries<'dict, T: 'static> {
     next: Option<NonNull<DictionaryEntry<T>>>,
-    /// Ensure that the `Entries` iterator is bound to the dictionary's
-    /// lifetime.
-    _dict: &'dict Dictionary<T, D>,
+    dict: CurrDict<'dict, T>,
+}
+
+enum CurrDict<'dict, T: 'static> {
+    Leaf(&'dict Dictionary<T>),
+    Parent(SharedDict<T>),
 }
 
 #[cfg(feature = "async")]
@@ -238,15 +244,14 @@ impl<T: 'static> DictionaryEntry<T> {
     }
 }
 
-impl<T: 'static, D: DropDict> Dictionary<T, D> {
+impl<T: 'static> Dictionary<T> {
     const MUTABLE: usize = usize::MAX;
-    pub(crate) fn new(bottom: *mut u8, size: usize) -> Self {
-        Self {
-            alloc: DictionaryBump::new(bottom, size),
-            tail: None,
-            refs: AtomicUsize::new(Self::MUTABLE),
-            parent: None,
-        }
+
+    /// Returns the [`Layout`] that must be allocated for a `Dictionary` of the
+    /// given `size`.
+    pub fn layout(size: usize) -> Result<Layout, LayoutError> {
+        let (layout, _) = Layout::new::<Self>().extend(Layout::array::<u8>(size)?)?;
+        Ok(layout.pad_to_align())
     }
 
     pub(crate) fn add_bi_fastr(&mut self, name: FaStr, bi: WordFunc<T>) -> Result<(), BumpError> {
@@ -270,7 +275,7 @@ impl<T: 'static, D: DropDict> Dictionary<T, D> {
         Ok(())
     }
 
-    pub(crate) fn build_entry(&mut self) -> Result<EntryBuilder<'_, T, D>, BumpError> {
+    pub(crate) fn build_entry(&mut self) -> Result<EntryBuilder<'_, T>, BumpError> {
         let base = self.alloc.bump::<DictionaryEntry<T>>()?;
         Ok(EntryBuilder {
             base,
@@ -280,10 +285,10 @@ impl<T: 'static, D: DropDict> Dictionary<T, D> {
         })
     }
 
-    pub(crate) fn entries(&self) -> Entries<'_, T, D> {
+    pub(crate) fn entries(&self) -> Entries<'_, T> {
         Entries {
             next: self.tail,
-            _dict: self,
+            dict: CurrDict::Leaf(self),
         }
     }
 
@@ -301,34 +306,48 @@ impl<T: 'static, D: DropDict> Dictionary<T, D> {
     ///
     /// This method returns an error if `other`'s bump arena lacks sufficient
     /// capacity to store all the entries in `self`.
-    pub(crate) fn deep_copy(&self, other: &mut Self) -> Result<(), BumpError> {
+    pub(crate) fn deep_copy(&self, _: &mut Self) -> Result<(), BumpError> {
         panic!("eliza: bad, get rid of this")
+    }
+}
+
+impl<T: 'static> Drop for DictionaryInner<T> {
+    fn drop(&mut self) {
+        let layout = Dictionary::<T>::layout(self.header.alloc.capacity())
+            .expect("if this dictionary was previously allocated, its layout must be valid...");
+        let deallocate = self.header.deallocate;
+        unsafe {
+            // drop the header, potentially running the destructor on the parent
+            // link, if one exists.
+            ptr::drop_in_place((&mut self.header) as *mut _);
+            deallocate(NonNull::from(self).cast(), layout);
+        }
+
     }
 }
 
 // === SharedDict ===
 
-impl<T: 'static, D: DropDict> SharedDict<T, D> {
-    const MAX_REFCOUNT: usize = Dictionary::<T, D>::MUTABLE - 1;
-
+impl<T: 'static> SharedDict<T> {
+    const MAX_REFCOUNT: usize = Dictionary::<T>::MUTABLE - 1;
 
     // Non-inlined part of `drop`.
     #[inline(never)]
     unsafe fn drop_slow(&mut self) {
         unsafe {
-            D::drop_dict(self.0)
+            ptr::drop_in_place(self.0.as_ptr())
         }
     }
 }
 
-impl <T: 'static, D: DropDict> Deref for SharedDict<T, D> {
-    type Target = Dictionary<T, D>;
+impl <T: 'static> Deref for SharedDict<T> {
+    type Target = Dictionary<T>;
     fn deref(&self) -> &Self::Target {
         unsafe { self.0.as_ref() }
     }
 }
 
-impl<T: 'static, D: DropDict> Clone for SharedDict<T, D>{
+impl<T: 'static> Clone for SharedDict<T>{
     #[inline]
     fn clone(&self) -> Self {
         // Using a relaxed ordering is alright here, as knowledge of the
@@ -342,7 +361,7 @@ impl<T: 'static, D: DropDict> Clone for SharedDict<T, D>{
         // another must already provide any required synchronization.
         //
         // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
-        let old_size = self.refs.strong.fetch_add(1, Relaxed);
+        let old_size = self.refs.fetch_add(1, Relaxed);
 
         // However we need to guard against massive refcounts in case someone is `mem::forget`ing
         // `SharedDict`s. If we don't do this the count can overflow and users will use-after free. This
@@ -358,12 +377,12 @@ impl<T: 'static, D: DropDict> Clone for SharedDict<T, D>{
             unreachable!("bad news")
         }
 
-        unsafe { Self(self.0) }
+        Self(self.0)
     }
 }
 
 
-impl<T: 'static, D: DropDict> Drop for SharedDict<T, D>{
+impl<T: 'static> Drop for SharedDict<T>{
     #[inline]
     fn drop(&mut self) {
         // Because `fetch_sub` is already atomic, we do not need to synchronize
@@ -411,53 +430,64 @@ impl<T: 'static, D: DropDict> Drop for SharedDict<T, D>{
 
 // === OwnedDict ===
 
-impl<T: 'static, D: DropDict> OwnedDict<T, D> {
-    pub fn new(dict: NonNull<Dictionary<T, D>>) -> Self {
-        debug_assert_eq!(
-            unsafe { dict.as_ref().refs.load(Acquire) },
-            Dictionary::<T, D>::MUTABLE,
-        );
-        Self(dict)
+impl<T: 'static> OwnedDict<T> {
+    pub fn new<D: DropDict>(dict: NonNull<MaybeUninit<Dictionary<T>>>, size: usize) -> Self {
+        let ptr = dict.as_ptr().cast::<DictionaryInner<T>>();
+        unsafe {
+            let bump_base = addr_of_mut!((*ptr).bytes)
+                // TODO(eliza): don't ignore the `MaybeUninit`ness of the bump region...
+                .cast::<u8>();
+            // Initialize the header, using `write` instead of assignment via
+            // `=` to not call `drop` on the old, uninitialized value.
+            addr_of_mut!((*ptr).header).write(Dictionary {
+                tail: None,
+                refs: AtomicUsize::new(Dictionary::<T>::MUTABLE),
+                parent: None,
+                alloc: DictionaryBump::new(bump_base, size),
+                deallocate: D::drop_dict,
+            });
+        }
+        Self(dict.cast::<Dictionary<T>>())
     }
 
-    pub fn into_shared(self) -> SharedDict<T, D> {
+    pub fn into_shared(self) -> SharedDict<T> {
         // don't let the destructor run, as it will deallocate the dictionary.
         let this = mem::ManuallyDrop::new(self);
         this.refs.compare_exchange(
-            Dictionary::<T, D>::MUTABLE,
+            Dictionary::<T>::MUTABLE,
             1, AcqRel, Acquire
         ).expect("dictionary must have been mutable");
         SharedDict(this.0)
     }
 }
 
-impl<T: 'static, D: DropDict> Deref for OwnedDict<T, D> {
-    type Target = Dictionary<T, D>;
+impl<T: 'static> Deref for OwnedDict<T> {
+    type Target = Dictionary<T>;
     fn deref(&self) -> &Self::Target {
         unsafe { self.0.as_ref() }
     }
 }
 
-impl<T: 'static, D: DropDict> DerefMut for OwnedDict<T, D> {
-    fn deref_mut(&self) -> &Self::Target {
+impl<T: 'static> DerefMut for OwnedDict<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe {
-            debug_assert_eq!(self.0.as_ref().refs.load(Acquire), Dictionary::<T, D>::MUTABLE);
+            debug_assert_eq!(self.0.as_ref().refs.load(Acquire), Dictionary::<T>::MUTABLE);
             self.0.as_mut()
         }
     }
 }
 
-impl<T: 'static, D: DropDict> Drop for OwnedDict<T, D> {
+impl<T: 'static> Drop for OwnedDict<T> {
     fn drop(&mut self) {
         unsafe {
-            D::drop_dict(self.0)
+            ptr::drop_in_place(self.0.as_ptr())
         }
     }
 }
 
 // === EntryBuilder ===
 
-impl<T, D: DropDict> EntryBuilder<'_, T, D> {
+impl<T: > EntryBuilder<'_, T> {
     pub(crate) fn write_word(mut self, word: Word) -> Result<Self, BumpError> {
         self.dict.alloc.bump_write(word)?;
         self.len += 1;
@@ -492,8 +522,45 @@ impl<T, D: DropDict> EntryBuilder<'_, T, D> {
     }
 }
 
+// === impl Entries ===
+
+impl<'dict, T: 'static> Iterator for Entries<'dict, T> {
+    type Item = &'dict DictionaryEntry<T>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let entry = self.next.take()?;
+        let entry = unsafe {
+            // Safety: `self.next` must be a pointer into the VM's dictionary
+            // entries. The caller who constructs a `Entries` iterator is
+            // responsible for ensuring this.
+            entry.as_ref()
+        };
+        match entry.link {
+            Some(next) => self.next = Some(next),
+            None => {
+                // traverse the parent link
+                if let Some(parent) = self.dict.dict().parent.clone() {
+                    self.next = parent.tail;
+                    self.dict = CurrDict::Parent(parent);
+                }
+            }
+        }
+        Some(entry)
+    }
+}
+
+impl<T> CurrDict<'_, T> {
+    fn dict(&self) -> &'_ Dictionary<T> {
+        match self {
+            Self::Leaf(dict) => dict,
+            Self::Parent(parent) => parent,
+        }
+    }
+}
+
 impl DictionaryBump {
-    fn new(bottom: *mut u8, size: usize) -> Self {
+    pub fn new(bottom: *mut u8, size: usize) -> Self {
         let end = bottom.wrapping_add(size);
         debug_assert!(end >= bottom);
         Self {
@@ -588,37 +655,6 @@ impl DictionaryBump {
 
     pub fn used(&self) -> usize {
         (self.cur as usize) - (self.start as usize)
-    }
-}
-
-// === impl Entries ===
-
-impl<'dict, T: 'static, D: DropDict> Iterator for Entries<'dict, T, D> {
-    type Item = &'dict DictionaryEntry<T>; 
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        let entry = self.next.take()?;
-        let entry = unsafe {
-            // Safety: `self.next` must be a pointer into the VM's dictionary
-            // entries. The caller who constructs a `Entries` iterator is
-            // responsible for ensuring this.
-            entry.as_ref()
-        };
-        match entry.link {
-            Some(next) => self.next = Some(next),
-            None => {
-                // traverse the parent link
-                if let Some(ref parent) = self.dict.parent {
-                    let dict = unsafe {
-                        parent.as_ref()
-                    };
-                    self.next = dict.tail;
-                    self.dict = dict;
-                }
-            }
-        }
-        Some(entry)
     }
 }
 
