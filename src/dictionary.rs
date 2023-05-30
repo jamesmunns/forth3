@@ -101,12 +101,13 @@ pub struct Dictionary<T: 'static> {
     /// chain of references. When dropping the dictionary, we decrement the
     /// parent's ref count.
     parent: Option<SharedDict<T>>,
-    deallocate: unsafe fn (ptr: NonNull<u8>, layout: Layout),
+    deallocator: *const (),
+    deallocate: unsafe fn (deallocator: *const (), ptr: NonNull<u8>, layout: Layout),
 }
 
-pub trait DropDict {
+pub trait DropDict: 'static {
     /// Deallocate a dictionary.
-    unsafe fn drop_dict(ptr: NonNull<u8>, layout: Layout);
+    unsafe fn drop_dict(&self, ptr: NonNull<u8>, layout: Layout);
 }
 
 pub(crate) struct EntryBuilder<'dict, T: 'static> {
@@ -312,7 +313,7 @@ impl<T: 'static> SharedDict<T> {
             let dealloc = self.deallocate;
             let layout = Dictionary::<T>::layout(self.alloc.capacity()).unwrap();
             ptr::drop_in_place(self.0.as_ptr());
-            (dealloc)(self.0.cast(), layout);
+            (dealloc)(self.deallocator, self.0.cast(), layout);
         }
     }
 }
@@ -408,13 +409,17 @@ impl<T: 'static> Drop for SharedDict<T>{
 // === OwnedDict ===
 
 impl<T: 'static> OwnedDict<T> {
-    pub fn new<D: DropDict>(dict: NonNull<MaybeUninit<Dictionary<T>>>, size: usize) -> Self {
-
+    pub fn new<D: DropDict>(deallocator: &'static D, dict: NonNull<MaybeUninit<Dictionary<T>>>, size: usize) -> Self {
         // A helper type to provide proper layout generation for initialization
         #[repr(C)]
         struct DictionaryInner<T: 'static> {
             pub(crate) header: Dictionary<T>,
             bytes: [MaybeUninit<u8>; 0],
+        }
+
+        unsafe fn erased_deallocate<D: DropDict>(deallocator: *const (), ptr: NonNull<u8>, layout: Layout) {
+            let deallocator = deallocator as *const D;
+            (*deallocator).drop_dict(ptr, layout)
         }
 
         let ptr = dict.as_ptr().cast::<DictionaryInner<T>>();
@@ -429,7 +434,8 @@ impl<T: 'static> OwnedDict<T> {
                 refs: AtomicUsize::new(Dictionary::<T>::MUTABLE),
                 parent: None,
                 alloc: DictionaryBump::new(bump_base, size),
-                deallocate: D::drop_dict,
+                deallocate: erased_deallocate::<D>,
+                deallocator: deallocator as *const D as *const (),
             });
         }
         Self(dict.cast::<Dictionary<T>>())
@@ -482,7 +488,7 @@ impl<T: 'static> Drop for OwnedDict<T> {
             let dealloc = self.deallocate;
             let layout = Dictionary::<T>::layout(self.alloc.capacity()).unwrap();
             ptr::drop_in_place(self.0.as_ptr());
-            (dealloc)(self.0.cast(), layout);
+            (dealloc)(self.deallocator, self.0.cast(), layout);
         }
     }
 }
@@ -731,7 +737,7 @@ pub mod test {
     // Intended to be run with miri or valgrind where leaks are made apparent
     #[test]
     fn just_one_dict() {
-        let buf: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(512);
+        let buf: OwnedDict<()> = alloc_dict::<()>(512);
         assert_eq!(buf.refs.load(Ordering::Relaxed), usize::MAX);
     }
 
@@ -740,8 +746,8 @@ pub mod test {
     // Intended to be run with miri or valgrind where leaks are made apparent
     #[test]
     fn nested_dicts() {
-        let buf_1: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(512);
-        let mut buf_2: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(256);
+        let buf_1: OwnedDict<()> = alloc_dict::<()>(512);
+        let mut buf_2: OwnedDict<()> = alloc_dict::<()>(256);
         let buf_1 = buf_1.into_shared();
         buf_2.parent = Some(buf_1);
     }
@@ -749,9 +755,9 @@ pub mod test {
     // Similar to above, but making sure refcounting works properly
     #[test]
     fn shared_dicts() {
-        let buf_1: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(512);
-        let mut buf_2: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(256);
-        let mut buf_3: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(128);
+        let buf_1: OwnedDict<()> = alloc_dict::<()>(512);
+        let mut buf_2: OwnedDict<()> = alloc_dict::<()>(256);
+        let mut buf_3: OwnedDict<()> = alloc_dict::<()>(128);
         let buf_1 = buf_1.into_shared();
         assert_eq!(buf_1.refs.load(Ordering::Relaxed), 1);
         buf_2.parent = Some(buf_1.clone());
@@ -772,7 +778,7 @@ pub mod test {
             panic!("Don't ACTUALLY call me!");
         }
 
-        let mut buf: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(512);
+        let mut buf: OwnedDict<()> = alloc_dict::<()>(512);
         assert!(buf.tail.is_none());
 
         let strname = buf.alloc.bump_str("stubby").unwrap();
@@ -787,13 +793,13 @@ pub mod test {
         }
 
         // Put a builtin into the first slab
-        let mut buf_1: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(512);
+        let mut buf_1: OwnedDict<()> = alloc_dict::<()>(512);
         let strname = buf_1.alloc.bump_str("stubby").unwrap();
         buf_1.add_bi_fastr(strname, stubby).unwrap();
 
         // Make a new dict slab, which "becomes" the mutable tip, with the original
         // slab as the parent of the new mutable tip
-        let buf_2: OwnedDict<()> = alloc_dict::<(), LeakBoxDict>(512);
+        let buf_2: OwnedDict<()> = alloc_dict::<()>(512);
         let buf_1_ro = buf_1.fork_onto(buf_2);
 
         // Find the builtin in the original slab, it should say "current" here

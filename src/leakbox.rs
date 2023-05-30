@@ -123,7 +123,7 @@ impl<T: 'static> LBForth<T> {
                 (_payload_dstack.ptr(), _payload_dstack.len()),
                 (_payload_rstack.ptr(), _payload_rstack.len()),
                 (_payload_cstack.ptr(), _payload_cstack.len()),
-                alloc_dict::<T, LeakBoxDict>(params.dict_buf_elems),
+                alloc_dict::<T>(params.dict_buf_elems),
                 input,
                 output,
                 host_ctxt,
@@ -156,8 +156,8 @@ impl<T: 'static> LBForth<T> {
         let _input_buf: LeakBox<u8> = LeakBox::new(params.input_buf_elems);
         let _output_buf: LeakBox<u8> = LeakBox::new(params.output_buf_elems);
 
-        let my_new_dict = alloc_dict::<T, LeakBoxDict>(params.dict_buf_elems);
-        let new_dict = alloc_dict::<T, LeakBoxDict>(params.dict_buf_elems);
+        let my_new_dict = alloc_dict::<T>(params.dict_buf_elems);
+        let new_dict = alloc_dict::<T>(params.dict_buf_elems);
 
         let input = WordStrBuf::new(_input_buf.ptr(), _input_buf.len());
         let output = OutputBuf::new(_output_buf.ptr(), _output_buf.len());
@@ -209,7 +209,7 @@ where
                 (_payload_dstack.ptr(), _payload_dstack.len()),
                 (_payload_rstack.ptr(), _payload_rstack.len()),
                 (_payload_cstack.ptr(), _payload_cstack.len()),
-                alloc_dict::<T, LeakBoxDict>(params.dict_buf_elems),
+                alloc_dict::<T>(params.dict_buf_elems),
                 input,
                 output,
                 host_ctxt,
@@ -244,8 +244,8 @@ where
         let _input_buf: LeakBox<u8> = LeakBox::new(params.input_buf_elems);
         let _output_buf: LeakBox<u8> = LeakBox::new(params.output_buf_elems);
 
-        let my_new_dict = alloc_dict::<T, LeakBoxDict>(params.dict_buf_elems);
-        let new_dict = alloc_dict::<T, LeakBoxDict>(params.dict_buf_elems);
+        let my_new_dict = alloc_dict::<T>(params.dict_buf_elems);
+        let new_dict = alloc_dict::<T>(params.dict_buf_elems);
 
         let input = WordStrBuf::new(_input_buf.ptr(), _input_buf.len());
         let output = OutputBuf::new(_output_buf.ptr(), _output_buf.len());
@@ -273,16 +273,17 @@ where
 }
 
 impl DropDict for LeakBoxDict {
-    unsafe fn drop_dict(ptr: NonNull<u8>, layout: Layout) {
+    unsafe fn drop_dict(&self, ptr: NonNull<u8>, layout: Layout) {
         System.dealloc(ptr.cast().as_ptr(), layout)
     }
 }
 
-pub(crate) fn alloc_dict<T, D: DropDict>(size: usize) -> OwnedDict<T> {
+pub(crate) fn alloc_dict<T>(size: usize) -> OwnedDict<T> {
     let layout = match Dictionary::<T>::layout(size) {
         Ok(layout) => layout,
         Err(error) => panic!("Dictionary size {size} too large to allocate: {error}"),
     };
     let ptr = unsafe { NonNull::new(System.alloc(layout)).unwrap().cast() };
-    OwnedDict::new::<D>(ptr, size)
+    static DROP_DICT: LeakBoxDict = LeakBoxDict;
+    OwnedDict::new(&DROP_DICT, ptr, size)
 }
