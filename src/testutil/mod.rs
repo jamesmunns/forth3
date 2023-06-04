@@ -72,7 +72,7 @@ pub fn all_runtest(contents: &str) {
 pub fn blocking_runtest(contents: &str) {
     let tokd = tokenize(contents, true).unwrap();
     let mut forth = LBForth::from_params(tokd.settings, (), Forth::FULL_BUILTINS);
-    blocking_steps_with(tokd.steps.as_slice(), &mut forth.forth);
+    blocking_steps_with(&tokd.steps, &mut forth.forth);
 }
 
 /// Run the given forth ui-test against the given forth vm.
@@ -80,7 +80,7 @@ pub fn blocking_runtest(contents: &str) {
 /// Does not accept ui-tests with frontmatter configuration (will panic)
 pub fn blocking_runtest_with<T>(forth: &mut Forth<T>, contents: &str) {
     let tokd = tokenize(contents, false).unwrap();
-    blocking_steps_with(tokd.steps.as_slice(), forth);
+    blocking_steps_with(&tokd.steps, forth);
 }
 
 /// Run the given forth ui test against the async forth vm
@@ -133,10 +133,13 @@ where
     D: for<'forth> crate::dictionary::AsyncBuiltins<'forth, T>,
 {
     let tokd = tokenize(contents, false).unwrap();
-    for Step { ref input, output: ref outcome } in tokd.steps {
-        #[cfg(not(miri))]
-        println!("> {input}");
-        forth.input_mut().fill(input).unwrap();
+    let steps = match &tokd.steps {
+        ContentKind::None => return,
+        ContentKind::Single(steps) => steps,
+        ContentKind::Multi(_) => panic!("Can't have multitasking blockon tests"),
+    };
+    for Step { input, output: outcome } in steps {
+        forth.input_mut().fill(&input).unwrap();
         let res = futures::executor::block_on(forth.process_line());
         check_output(res, outcome, forth.output().as_str());
         forth.output_mut().clear();
@@ -144,8 +147,6 @@ where
 }
 
 fn check_output(res: Result<(), Error>, outcome: &Outcome, output: &str) {
-    #[cfg(not(miri))]
-    println!("< {output}");
     match (res, outcome) {
         (Ok(()), Outcome::OkAnyOutput) => {}
         (Ok(()), Outcome::OkWithOutput(exp)) => {
@@ -171,11 +172,15 @@ fn check_output(res: Result<(), Error>, outcome: &Outcome, output: &str) {
 // Runs the given steps against the given forth VM.
 //
 // Panics on any mismatch
-fn blocking_steps_with<T>(steps: &[Step], forth: &mut Forth<T>) {
-    for Step { input, output: outcome } in steps {
-        #[cfg(not(miri))]
-        println!("> {input}");
-        forth.input.fill(input).unwrap();
+fn blocking_steps_with<T>(steps: &ContentKind, forth: &mut Forth<T>) {
+    let steps = match steps {
+        ContentKind::None => return,
+        ContentKind::Single(steps) => steps,
+        ContentKind::Multi(_) => panic!("Can't have multitasking blocking tests"),
+    };
+
+    for Step { input, output: outcome } in steps.into_iter() {
+        forth.input.fill(&input).unwrap();
         let res = forth.process_line();
         check_output(res, outcome, forth.output.as_str());
         forth.output.clear();
@@ -195,10 +200,148 @@ struct Step {
     output: Outcome,
 }
 
+#[derive(Debug, Default)]
+enum ContentKind {
+    #[default]
+    None,
+    Single(Vec<Step>),
+    Multi(Vec<(usize, Vec<Step>)>),
+}
+
 #[derive(Default, Debug)]
 struct Tokenized {
     settings: LBForthParams,
-    steps: Vec<Step>,
+    steps: ContentKind,
+}
+
+impl Tokenized {
+    fn push_success_input(&mut self, contents: &str, idx: Option<usize>) {
+        match (idx, &mut self.steps) {
+            (None, ContentKind::Single(single)) => {
+                single.push(Step {
+                    input: contents.to_string(),
+                    output: Outcome::OkAnyOutput,
+                });
+            },
+            (None, ContentKind::None) => {
+                self.steps = ContentKind::Single(vec![
+                    Step {
+                        input: contents.to_string(),
+                        output: Outcome::OkAnyOutput,
+                    },
+                ]);
+            },
+            (Some(idx), ContentKind::None) => {
+                self.steps = ContentKind::Multi(vec![(
+                    idx,
+                    vec![
+                        Step {
+                            input: contents.to_string(),
+                            output: Outcome::OkAnyOutput,
+                        },
+                    ],
+                )]);
+            },
+            (Some(idx), ContentKind::Multi(multi)) => {
+                if let Some((_sidx, steps)) = multi.iter_mut().find(|(sidx, _s)| *sidx == idx) {
+                    steps.push(Step {
+                        input: contents.to_string(),
+                        output: Outcome::OkAnyOutput,
+                    });
+                }
+            },
+
+            // Invalid
+            (Some(_), ContentKind::Single(_)) => panic!(),
+            (None, ContentKind::Multi(_)) => panic!(),
+        }
+    }
+
+    fn push_success_output(&mut self, contents: &str, idx: Option<usize>) {
+        match (idx, &mut self.steps) {
+            (None, ContentKind::Single(single)) => {
+                let cur_step = single.last_mut().unwrap();
+                let expected_out = contents.to_string();
+                match &mut cur_step.output {
+                    Outcome::OkAnyOutput => {
+                        cur_step.output = Outcome::OkWithOutput(vec![expected_out]);
+                    },
+                    Outcome::OkWithOutput(o) => {
+                        o.push(expected_out);
+                    },
+                    Outcome::FatalError => panic!("Fatal error can't set output"),
+                }
+            },
+            (Some(idx), ContentKind::Multi(multi)) => {
+                let cur_step = multi
+                    .iter_mut()
+                    .find(|(sidx, _step)| *sidx == idx)
+                    .unwrap()
+                    .1
+                    .last_mut()
+                    .unwrap();
+
+                let expected_out = contents.to_string();
+                match &mut cur_step.output {
+                    Outcome::OkAnyOutput => {
+                        cur_step.output = Outcome::OkWithOutput(vec![expected_out]);
+                    },
+                    Outcome::OkWithOutput(o) => {
+                        o.push(expected_out);
+                    },
+                    Outcome::FatalError => panic!("Fatal error can't set output"),
+                }
+            },
+
+            // Invalid
+            (Some(_), ContentKind::None) => panic!(),
+            (None, ContentKind::None) => panic!(),
+            (Some(_), ContentKind::Single(_)) => panic!(),
+            (None, ContentKind::Multi(_)) => panic!(),
+        }
+    }
+
+    fn push_exception_input(&mut self, contents: &str, idx: Option<usize>) {
+        match (idx, &mut self.steps) {
+            (None, ContentKind::Single(single)) => {
+                single.push(Step {
+                    input: contents.to_string(),
+                    output: Outcome::FatalError,
+                });
+            },
+            (None, ContentKind::None) => {
+                self.steps = ContentKind::Single(vec![
+                    Step {
+                        input: contents.to_string(),
+                        output: Outcome::FatalError,
+                    },
+                ]);
+            },
+            (Some(idx), ContentKind::None) => {
+                self.steps = ContentKind::Multi(vec![(
+                    idx,
+                    vec![
+                        Step {
+                            input: contents.to_string(),
+                            output: Outcome::FatalError,
+                        },
+                    ],
+                )]);
+            },
+            (Some(idx), ContentKind::Multi(multi)) => {
+                if let Some((_sidx, steps)) = multi.iter_mut().find(|(sidx, _s)| *sidx == idx) {
+                    steps.push(Step {
+                        input: contents.to_string(),
+                        output: Outcome::FatalError,
+                    });
+                }
+            },
+
+            // Invalid
+            (Some(_), ContentKind::Single(_)) => panic!(),
+            (None, ContentKind::Multi(_)) => panic!(),
+        }
+    }
 }
 
 fn tokenize(contents: &str, allow_frontmatter: bool) -> Result<Tokenized, ()> {
@@ -213,34 +356,26 @@ fn tokenize(contents: &str, allow_frontmatter: bool) -> Result<Tokenized, ()> {
             continue;
         };
 
+        let mut num = None;
+        let (tok, remain) = if let Ok(idx) = tok.parse::<usize>() {
+            num = Some(idx);
+            remain.split_once(" ").unwrap()
+        } else {
+            (tok, remain)
+        };
+
         match tok {
             ">" => {
                 frontmatter_done = true;
-                output.steps.push(Step {
-                    input: remain.to_string(),
-                    output: Outcome::OkAnyOutput,
-                });
+                output.push_success_input(remain, num);
             }
             "<" => {
                 frontmatter_done = true;
-                let cur_step = output.steps.last_mut().unwrap();
-                let expected_out = remain.to_string();
-                match &mut cur_step.output {
-                    Outcome::OkAnyOutput => {
-                        cur_step.output = Outcome::OkWithOutput(vec![expected_out]);
-                    },
-                    Outcome::OkWithOutput(o) => {
-                        o.push(remain.to_string());
-                    },
-                    Outcome::FatalError => panic!("Fatal error can't set output"),
-                }
+                output.push_success_output(remain, num);
             }
             "x" => {
                 frontmatter_done = true;
-                output.steps.push(Step {
-                    input: remain.to_string(),
-                    output: Outcome::FatalError,
-                });
+                output.push_exception_input(remain, num);
             }
             "(" => {
                 let mut split = remain.split_whitespace();
